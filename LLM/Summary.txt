@@ -1,0 +1,57 @@
+ollama -> run local model, only http, no https
+ -llama
+ -qwen
+ -deepseek V4
+
+Cursor
+  -does not support byom any more, needs pro
+  -standalone application
+  - has limited free Composer 2.5 fast access
+
+Cline
+- does not support any more local models, uses oenroute by default
+- vs code extension
+
+Continue.dev
+- does not support any more local models,
+- vs code extension
+- was available yesterday, not today
+
+Aider
+     standalone installer
+     can use open route - router to deepseek for aider
+          - 3 deepseek models
+     vs code extension available
+     basic interface to run models, orchestrator needed
+
+
+
+Copilot
+    - limited Haiku free
+
+
+LM Studio
+ - a lot of free models to download
+ - local server
+- chat
+- gemma4 default - good
+
+JAN Ai
+- free jan llama model
+- can connect to LM Studio
+- can connect to ollama $env:OLLAMA_ORIGINS = "*" needed
+
+ComfyUI - graphical engine
+         -flux
+         -difussion models 
+
+         .\python_embeded\python.exe -m pip install -r ComfyUI\manager_requirements.txt
+         .\python_embeded\python.exe -s ComfyUI\main.py --windows-standalone-build --enable-manager
+pause
+
+opencode Ai
+- opencode Cli
+- opencode vs plugin
+- opencode vs gui
+- opencode/big-pickle model - running in cloud
+- deepseek V4 flash, hy3, north mini code, mino v2.5, Nemotron 3 ultra free

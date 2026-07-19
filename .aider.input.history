@@ -1,0 +1,168 @@
+
+# 2026-07-18 21:32:09.012496
++y
+
+# 2026-07-18 21:35:22.529360
++create install scripts for a clean installation of each element, then a master install script which calls them in the right order based on the dependencies. python, git, aider, ollama, local models for ollama (deepseek, llama, qwen), vs code, vc code extension for aider
+
+# 2026-07-18 21:36:41.537656
++y
+
+# 2026-07-18 21:37:44.868582
++move the new scripts in a linux folder. then create a windows folder and generate the scripts for windows.
+
+# 2026-07-18 21:38:29.416105
++y
+
+# 2026-07-18 21:42:23.308351
++move the linux scripts to a linux folder
+
+# 2026-07-18 21:43:48.282641
++we are on windows. create a linux named folder and move the linux files there with windows commands
+
+# 2026-07-18 21:47:02.766859
++y
+
+# 2026-07-18 21:47:39.072652
++execute it..
+
+# 2026-07-18 21:49:56.932770
++why do you not move them?
+
+# 2026-07-18 21:50:51.787440
++are you there?
+
+# 2026-07-18 21:53:36.198190
++i have no clue what you do, but nothing changes
+
+# 2026-07-18 21:55:37.941930
++y
+
+# 2026-07-18 21:56:15.605619
++ok, i will do it myself, this seems to be to complicated for you
+
+# 2026-07-18 21:57:06.997854
++use english...
+
+# 2026-07-18 22:00:04.467697
++extend the list of the installed software by scripts with powershell - for teh windows version
+
+# 2026-07-18 22:00:23.276272
++A
+
+# 2026-07-18 22:01:02.900930
++y
+
+# 2026-07-18 22:01:45.772880
++why did you create a script for docker?
+
+# 2026-07-18 22:10:13.331273
++i only wanted you to add installation script for powershell. nothing else. remove what you just added, keep powershell
+
+# 2026-07-18 22:20:39.803116
++commit
+
+# 2026-07-18 22:37:23.912732
++n
+
+# 2026-07-18 22:37:26.375514
++hi
+
+# 2026-07-18 22:39:17.186259
++n
+
+# 2026-07-18 22:39:20.469273
++hi
+
+# 2026-07-19 16:04:43.073717
++n
+
+# 2026-07-19 16:04:48.845230
++hello
+
+# 2026-07-19 16:05:44.959475
++/add LLM\llama.ps1
+
+# 2026-07-19 16:06:07.221214
++what is in the file LLM\llama.ps1
+
+# 2026-07-19 16:07:16.498847
++what does the file do?
+
+# 2026-07-19 16:08:14.743511
++/architect
+
+# 2026-07-19 16:09:10.623910
++/drop
+
+# 2026-07-19 16:10:57.070194
++/map
+
+# 2026-07-19 16:11:35.054920
++/add capture_ctrl.c
+
+# 2026-07-19 16:11:53.880108
++what is teh functionality of the capture_ctrl.c
+
+# 2026-07-19 16:19:01.522816
++n
+
+# 2026-07-19 16:19:05.891444
++hello
+
+# 2026-07-19 16:19:36.391439
++ok, first, talk to me omn english
+
+# 2026-07-19 16:19:59.211177
++how is the weATHER?
+
+# 2026-07-19 16:20:49.952633
++/add capture_ctrl.c
+
+# 2026-07-19 16:21:04.695002
++what does the code in capture_ctrl.c
+
+# 2026-07-19 16:21:35.589588
++n
+
+# 2026-07-19 16:22:04.092714
++what does the code in the added file do?
+
+# 2026-07-19 16:22:28.992385
++n
+
+# 2026-07-19 16:23:15.586726
++create a new file with a c++ file and new class to represent humans with parameters like age, name birtdate
+
+# 2026-07-19 16:24:43.211518
++y
+
+# 2026-07-19 16:26:50.958905
++n
+
+# 2026-07-19 16:28:19.983404
++/add capture_ctrl.c
+
+# 2026-07-19 16:28:48.576782
++what does the code in the capture_ctrl.c do?
+
+# 2026-07-19 20:19:08.450803
++N
+
+# 2026-07-19 20:19:12.500594
++HELLO
+
+# 2026-07-20 12:48:41.665052
++n
+
+# 2026-07-20 12:48:47.456628
++hello
+
+# 2026-07-20 12:49:04.699446
++use english
+
+# 2026-07-23 21:52:39.542335
++/add LLM\qwen.ps1 LLM\Summary.txt
+
+# 2026-07-23 21:52:52.946242
++n
