@@ -424,6 +424,9 @@ export function getWebviewContent(extensionUri: vscode.Uri, webview: vscode.Webv
                 <option value="ask">Always Ask</option>
             </select>
             <button id="compress-btn" title="Compress chat history to reduce context usage">Compress</button>
+            <button id="benchmark-btn" title="Run a predefined benchmark task against the current model">Benchmark</button>
+            <input id="batch-tries" type="number" min="1" max="20" value="2" style="width:48px;padding:3px 4px;border-radius:4px;border:1px solid var(--vscode-panel-border);background:var(--vscode-input-background);color:var(--vscode-input-foreground);font-size:11px;text-align:center;" title="Number of tries per model">
+            <button id="batch-benchmark-btn" title="Run benchmark against all discovered models">Batch</button>
             <button id="clear-btn">Clear</button>
         </div>
     </div>

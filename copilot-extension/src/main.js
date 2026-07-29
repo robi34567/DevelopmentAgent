@@ -16,6 +16,9 @@
     var stopBtn = document.getElementById('stop-btn');
     var clearBtn = document.getElementById('clear-btn');
     var compressBtn = document.getElementById('compress-btn');
+    var benchmarkBtn = document.getElementById('benchmark-btn');
+    var batchBenchmarkBtn = document.getElementById('batch-benchmark-btn');
+    var batchTriesInput = document.getElementById('batch-tries');
     var providerSelect = document.getElementById('provider-select');
     var modelSelect = document.getElementById('model-select');
     var approvalSelect = document.getElementById('approval-select');
@@ -26,6 +29,8 @@
     var isProcessing = false;
     var currentAssistantMessage = null;
     var debugElOriginal = debugEl ? debugEl.outerHTML : '';
+    var cmdHistory = [];
+    var cmdHistoryPos = -1;
 
     function saveChatState() {
         var html = chatContainer.innerHTML;
@@ -41,6 +46,26 @@
         if (e.key === 'Enter' && !e.shiftKey) {
             e.preventDefault();
             sendMessage();
+        } else if (e.key === 'ArrowUp') {
+            e.preventDefault();
+            if (cmdHistory.length === 0) return;
+            if (cmdHistoryPos <= 0) cmdHistoryPos = cmdHistory.length;
+            cmdHistoryPos--;
+            messageInput.value = cmdHistory[cmdHistoryPos];
+            messageInput.style.height = 'auto';
+            messageInput.style.height = Math.min(messageInput.scrollHeight, 120) + 'px';
+        } else if (e.key === 'ArrowDown') {
+            e.preventDefault();
+            if (cmdHistoryPos === -1) return;
+            if (cmdHistoryPos < cmdHistory.length - 1) {
+                cmdHistoryPos++;
+                messageInput.value = cmdHistory[cmdHistoryPos];
+            } else {
+                cmdHistoryPos = -1;
+                messageInput.value = '';
+            }
+            messageInput.style.height = 'auto';
+            messageInput.style.height = Math.min(messageInput.scrollHeight, 120) + 'px';
         }
     });
 
@@ -48,6 +73,8 @@
     stopBtn.addEventListener('click', stopGeneration);
     clearBtn.addEventListener('click', clearChat);
     compressBtn.addEventListener('click', compressHistory);
+    benchmarkBtn.addEventListener('click', runBenchmark);
+    batchBenchmarkBtn.addEventListener('click', runBatchBenchmark);
 
     providerSelect.addEventListener('change', function() {
         vscode.postMessage({ type: 'changeProvider', provider: this.value });
@@ -129,6 +156,8 @@
     function sendMessage() {
         var text = messageInput.value.trim();
         if (!text || isProcessing) return;
+        cmdHistory.push(text);
+        cmdHistoryPos = -1;
         addMessage('user', text);
         messageInput.value = '';
         messageInput.style.height = 'auto';
@@ -166,6 +195,22 @@
         compressBtn.textContent = 'Compressing...';
     }
 
+    function runBenchmark() {
+        vscode.postMessage({ type: 'runBenchmark' });
+        benchmarkBtn.disabled = true;
+        benchmarkBtn.textContent = 'Benchmarking...';
+    }
+
+    function runBatchBenchmark() {
+        var tries = parseInt(batchTriesInput.value, 10) || 2;
+        vscode.postMessage({ type: 'runBatchBenchmark', tries: tries });
+        batchBenchmarkBtn.disabled = true;
+        batchBenchmarkBtn.textContent = 'Batching...';
+        isProcessing = true;
+        sendBtn.disabled = true;
+        stopBtn.disabled = false;
+    }
+
     function clearChat() {
         chatContainer.innerHTML = '';
         if (debugEl) chatContainer.appendChild(debugEl);
@@ -197,6 +242,28 @@
 
     function parseContent(content) {
         var escaped = escapeHtml(content);
+        escaped = escaped.replace(/\[READ\]([\s\S]*?)\[\/READ\]/g, function(m, p) {
+            return '<div class="cmd-block"><span class="cmd-label">&#128196; Read</span><div class="cmd-text">' + escapeHtml(p.trim()) + '</div></div>';
+        });
+        escaped = escaped.replace(/\[WRITE\]([\s\S]*?)\[\/WRITE\]/g, function(m, w) {
+            var n = w.indexOf('\n');
+            var wp = n === -1 ? w.trim() : w.substring(0, n).trim();
+            var wc = n === -1 ? '' : w.substring(n);
+            return '<div class="cmd-block"><span class="cmd-label">&#128221; Write</span><div class="cmd-text">' + escapeHtml(wp) + '</div>' + (wc ? '<div style="margin-top:6px;padding:6px;background:var(--vscode-terminal-background);border-radius:4px;font-size:11px;white-space:pre-wrap;max-height:200px;overflow-y:auto;">' + escapeHtml(wc) + '</div>' : '') + '</div>';
+        });
+        escaped = escaped.replace(/\[SEARCH\]([\s\S]*?)\[\/SEARCH\]/g, function(m, p) {
+            return '<div class="cmd-block"><span class="cmd-label">&#128270; Search</span><div class="cmd-text">' + escapeHtml(p.trim()) + '</div></div>';
+        });
+        escaped = escaped.replace(/\[FILES\]([\s\S]*?)\[\/FILES\]/g, function(m, p) {
+            return '<div class="cmd-block"><span class="cmd-label">&#128193; Files</span><div class="cmd-text">' + escapeHtml(p.trim()) + '</div></div>';
+        });
+        escaped = escaped.replace(/\[ASK\]([\s\S]*?)\[\/ASK\]/g, function(match, question) {
+            var escapedQ = escapeHtml(question);
+            return '<div style="background:var(--vscode-inputValidation-infoBackground);border:1px solid var(--vscode-inputValidation-infoBorder);border-radius:6px;padding:10px 14px;margin:8px 0;">' +
+                '<div style="font-size:11px;color:var(--vscode-inputValidation-infoForeground);margin-bottom:4px;text-transform:uppercase;letter-spacing:0.5px;">&#10067; Question</div>' +
+                '<div style="font-size:13px;">' + escapedQ.replace(/\n/g, '<br>') + '</div>' +
+                '</div>';
+        });
         escaped = escaped.replace(/\[CMD\]([\s\S]*?)\[\/CMD\]/g, function(match, cmd) {
             var escapedCmd = escapeHtml(cmd);
             var cmdForAttr = cmd.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
@@ -503,6 +570,27 @@
                 case 'sessionSaved':
                     sessionSelect.value = message.sessionId;
                     break;
+                case 'choiceRequest':
+                    var choicesDiv = document.createElement('div');
+                    choicesDiv.className = 'approval-prompt';
+                    choicesDiv.id = message.id;
+                    var html = '<div class="approval-label">Choose an option:</div>';
+                    for (var ci = 0; ci < message.choices.length; ci++) {
+                        var choiceLabel = escapeHtml(message.choices[ci]);
+                        html += '<button class="choice-btn" data-choice="' + choiceLabel.replace(/"/g, '&quot;') + '" style="display:block;width:100%;margin:4px 0;padding:6px 12px;background:var(--vscode-button-background);color:var(--vscode-button-foreground);border:none;border-radius:4px;cursor:pointer;font-size:12px;text-align:left;">' + choiceLabel + '</button>';
+                    }
+                    choicesDiv.innerHTML = html;
+                    chatContainer.appendChild(choicesDiv);
+                    chatContainer.scrollTop = chatContainer.scrollHeight;
+                    choicesDiv.querySelectorAll('.choice-btn').forEach(function(btn) {
+                        btn.addEventListener('click', function() {
+                            var choice = btn.dataset.choice;
+                            choicesDiv.querySelectorAll('.choice-btn').forEach(function(b) { b.disabled = true; b.style.opacity = '0.5'; });
+                            btn.textContent = '✓ ' + btn.textContent;
+                            vscode.postMessage({ type: 'choiceResponse', choice: choice });
+                        });
+                    });
+                    break;
                 case 'stopComplete':
                     isProcessing = false;
                     sendBtn.disabled = false;
@@ -512,6 +600,29 @@
                 case 'compressComplete':
                     compressBtn.disabled = false;
                     compressBtn.textContent = 'Compress';
+                    break;
+                case 'benchmarkComplete':
+                    benchmarkBtn.disabled = false;
+                    benchmarkBtn.textContent = 'Benchmark';
+                    break;
+                case 'batchBenchmarkComplete':
+                    batchBenchmarkBtn.disabled = false;
+                    batchBenchmarkBtn.textContent = 'Batch';
+                    isProcessing = false;
+                    sendBtn.disabled = false;
+                    stopBtn.disabled = true;
+                    hideTypingIndicator();
+                    break;
+                case 'benchmarkProgress':
+                    var progEl = document.getElementById('batch-progress');
+                    if (!progEl) {
+                        progEl = document.createElement('div');
+                        progEl.id = 'batch-progress';
+                        progEl.className = 'message system';
+                        chatContainer.appendChild(progEl);
+                    }
+                    progEl.innerHTML = escapeHtml(message.text).replace(/\n/g, '<br>');
+                    chatContainer.scrollTop = chatContainer.scrollHeight;
                     break;
                 case 'clearAndShowCompressed':
                     chatContainer.innerHTML = '';

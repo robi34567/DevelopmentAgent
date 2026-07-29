@@ -588,6 +588,15 @@ class SidebarProvider implements vscode.WebviewViewProvider {
                             case 'compressHistory':
                                 await handleCompressHistory();
                                 break;
+                            case 'runBenchmark':
+                                await handleBenchmark();
+                                break;
+                            case 'runBatchBenchmark':
+                                await handleBatchBenchmark(message.tries || 2);
+                                break;
+                            case 'choiceResponse':
+                                await handleChoiceResponse(message.choice);
+                                break;
                         }
                     } catch (err: any) {
                         console.error('[Local Copilot] Sidebar message handler error:', err);
@@ -649,8 +658,40 @@ export function activate(context: vscode.ExtensionContext) {
         runSelectedInTerminal();
     });
 
+    // Register the command to configure Ollama for network access
+    const configureOllamaCommand = vscode.commands.registerCommand('local-copilot.configureOllamaNetwork', async () => {
+        const host = vscode.workspace.getConfiguration('local-copilot').get<string>('ollamaHost', '0.0.0.0');
+        const choice = await vscode.window.showInformationMessage(
+            `Set Ollama to bind on ${host} (all network interfaces) and restart?`,
+            { modal: true },
+            'Yes, restart Ollama'
+        );
+        if (choice !== 'Yes, restart Ollama') return;
+
+        const terminal = vscode.window.activeTerminal || vscode.window.createTerminal('Ollama Config');
+        terminal.show();
+        terminal.sendText(`[System.Environment]::SetEnvironmentVariable("OLLAMA_HOST", "${host}", "User")`, true);
+        terminal.sendText('Stop-Service ollama -ErrorAction SilentlyContinue; Start-Sleep 2; Start-Service ollama -ErrorAction SilentlyContinue', true);
+        terminal.sendText('if ($?) { echo "Ollama service restarted with OLLAMA_HOST=' + host + '" } else { echo "Service restart failed. Run: $env:OLLAMA_HOST=\"' + host + '\" then: ollama serve" }', true);
+
+        // Update the endpoint to match
+        const ep = host === '0.0.0.0' ? 'http://localhost:11434' : `http://${host}:11434`;
+        const config = vscode.workspace.getConfiguration('local-copilot');
+        await config.update('ollamaEndpoint', ep, vscode.ConfigurationTarget.Global);
+
+        // Update current provider
+        if (currentProvider) {
+            try { currentProvider = createAIProvider('ollama', currentModel || undefined); } catch {}
+        }
+
+        setTimeout(() => {
+            vscode.window.showInformationMessage(`Ollama configured. Endpoint set to ${ep}. If the service failed to start, try running 'ollama serve' manually.`);
+        }, 3000);
+    });
+
     context.subscriptions.push(openChatCommand);
     context.subscriptions.push(runInTerminalCommand);
+    context.subscriptions.push(configureOllamaCommand);
 
     // Register a status bar item
     const statusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);
@@ -752,6 +793,15 @@ function createOrShowChatPanel(context: vscode.ExtensionContext) {
                         break;
                     case 'compressHistory':
                         await handleCompressHistory();
+                        break;
+                    case 'runBenchmark':
+                        await handleBenchmark();
+                        break;
+                    case 'runBatchBenchmark':
+                        await handleBatchBenchmark(message.tries || 2);
+                        break;
+                    case 'choiceResponse':
+                        await handleChoiceResponse(message.choice);
                         break;
                 }
             } catch (err: any) {
@@ -875,6 +925,28 @@ async function compressChatHistory(provider: AIProvider, manual: boolean = false
     }
 }
 
+function extractAskBlocks(text: string): string[] {
+    const regex = /\[ASK\]([\s\S]*?)\[\/ASK\]/g;
+    const questions: string[] = [];
+    let match;
+    while ((match = regex.exec(text)) !== null) {
+        const q = match[1].trim();
+        if (q) questions.push(q);
+    }
+    return questions;
+}
+
+function extractChoicesBlock(text: string): string[] | null {
+    const regex = /\[CHOICES\]([\s\S]*?)\[\/CHOICES\]/g;
+    const match = regex.exec(text);
+    if (!match) return null;
+    const raw = match[1].trim();
+    if (raw.includes('|')) {
+        return raw.split('|').map(s => s.trim()).filter(s => s.length > 0);
+    }
+    return raw.split('\n').map(s => s.trim()).filter(s => s.length > 0);
+}
+
 function extractCmdBlocks(text: string): string[] {
     const regex = /\[CMD\]([\s\S]*?)\[\/CMD\]/g;
     const commands: string[] = [];
@@ -884,6 +956,169 @@ function extractCmdBlocks(text: string): string[] {
         if (cmd) commands.push(cmd);
     }
     return commands;
+}
+
+function extractReadBlocks(text: string): string[] {
+    const regex = /\[READ\]([\s\S]*?)\[\/READ\]/g;
+    const paths: string[] = [];
+    let match;
+    while ((match = regex.exec(text)) !== null) {
+        const p = match[1].trim();
+        if (p) paths.push(p);
+    }
+    return paths;
+}
+
+function extractWriteBlocks(text: string): { path: string; content: string }[] {
+    const regex = /\[WRITE\]([\s\S]*?)\[\/WRITE\]/g;
+    const writes: { path: string; content: string }[] = [];
+    let match;
+    while ((match = regex.exec(text)) !== null) {
+        const raw = match[1];
+        const firstNewline = raw.indexOf('\n');
+        if (firstNewline === -1) {
+            writes.push({ path: raw.trim(), content: '' });
+        } else {
+            writes.push({ path: raw.substring(0, firstNewline).trim(), content: raw.substring(firstNewline + 1) });
+        }
+    }
+    return writes;
+}
+
+function extractSearchBlocks(text: string): string[] {
+    const regex = /\[SEARCH\]([\s\S]*?)\[\/SEARCH\]/g;
+    const patterns: string[] = [];
+    let match;
+    while ((match = regex.exec(text)) !== null) {
+        const p = match[1].trim();
+        if (p) patterns.push(p);
+    }
+    return patterns;
+}
+
+function extractFilesBlocks(text: string): string[] {
+    const regex = /\[FILES\]([\s\S]*?)\[\/FILES\]/g;
+    const globs: string[] = [];
+    let match;
+    while ((match = regex.exec(text)) !== null) {
+        const g = match[1].trim();
+        if (g) globs.push(g);
+    }
+    return globs;
+}
+
+async function handleReadFile(filePath: string): Promise<string> {
+    const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || '';
+    const resolved = path.isAbsolute(filePath) ? filePath : path.join(workspaceRoot, filePath);
+    if (!fs.existsSync(resolved)) {
+        return `[ERROR]File not found: ${filePath} (resolved: ${resolved})[/ERROR]`;
+    }
+    const stat = fs.statSync(resolved);
+    if (stat.isDirectory()) {
+        const entries = fs.readdirSync(resolved);
+        return `[OUTPUT]Contents of ${filePath}:\n${entries.join('\n')}[/OUTPUT]`;
+    }
+    const ext = path.extname(resolved).toLowerCase();
+    const binaryExts = ['.exe', '.dll', '.so', '.dylib', '.bin', '.dat', '.png', '.jpg', '.gif', '.ico', '.pdf', '.zip', '.gz', '.tar'];
+    if (binaryExts.includes(ext)) {
+        return `[ERROR]Cannot read binary file: ${filePath}[/ERROR]`;
+    }
+    try {
+        const content = fs.readFileSync(resolved, 'utf-8');
+        const MAX_READ_CHARS = 128000;
+        const truncated = content.length > MAX_READ_CHARS;
+        const display = truncated ? content.substring(0, MAX_READ_CHARS) : content;
+        return `[OUTPUT]${filePath}${truncated ? ' [truncated at ' + MAX_READ_CHARS + ' chars]' : ''}\n${display}[/OUTPUT]`;
+    } catch (e: any) {
+        return `[ERROR]Failed to read ${filePath}: ${e.message}[/ERROR]`;
+    }
+}
+
+async function handleWriteFile(filePath: string, content: string): Promise<string> {
+    const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || '';
+    const resolved = path.isAbsolute(filePath) ? filePath : path.join(workspaceRoot, filePath);
+    try {
+        const dir = path.dirname(resolved);
+        if (!fs.existsSync(dir)) {
+            fs.mkdirSync(dir, { recursive: true });
+        }
+        fs.writeFileSync(resolved, content, 'utf-8');
+        return `[OUTPUT]File written: ${filePath} (${content.length} chars)[/OUTPUT]`;
+    } catch (e: any) {
+        return `[ERROR]Failed to write ${filePath}: ${e.message}[/ERROR]`;
+    }
+}
+
+async function handleSearchFiles(pattern: string): Promise<string> {
+    const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || '';
+    if (!workspaceRoot) return `[ERROR]No workspace folder open[/ERROR]`;
+    const MAX_SEARCH_RESULTS = 200;
+    const results: string[] = [];
+    try {
+        const files = walkDir(workspaceRoot);
+        const re = new RegExp(pattern, 'i');
+        for (const file of files) {
+            if (results.length >= MAX_SEARCH_RESULTS) break;
+            const relPath = path.relative(workspaceRoot, file);
+            try {
+                const lines = fs.readFileSync(file, 'utf-8').split('\n');
+                for (let i = 0; i < lines.length; i++) {
+                    if (results.length >= MAX_SEARCH_RESULTS) break;
+                    if (re.test(lines[i])) {
+                        results.push(`${relPath}:${i + 1}: ${lines[i].trim().substring(0, 200)}`);
+                    }
+                }
+            } catch {}
+        }
+    } catch (e: any) {
+        return `[ERROR]Search failed: ${e.message}[/ERROR]`;
+    }
+    if (results.length === 0) return `[OUTPUT]No matches found for: ${pattern}[/OUTPUT]`;
+    return `[OUTPUT]Search results for "${pattern}" (${results.length} matches${results.length >= MAX_SEARCH_RESULTS ? ', truncated' : ''}):\n${results.join('\n')}[/OUTPUT]`;
+}
+
+async function handleGlobFiles(globPattern: string): Promise<string> {
+    const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || '';
+    if (!workspaceRoot) return `[ERROR]No workspace folder open[/ERROR]`;
+    const MAX_GLOB_RESULTS = 500;
+    try {
+        const files = walkDir(workspaceRoot, globPattern);
+        const relPaths = files.map(f => path.relative(workspaceRoot, f)).filter(f => !f.startsWith('node_modules') && !f.startsWith('.git'));
+        if (relPaths.length === 0) return `[OUTPUT]No files matching: ${globPattern}[/OUTPUT]`;
+        const display = relPaths.slice(0, MAX_GLOB_RESULTS);
+        const truncated = relPaths.length > MAX_GLOB_RESULTS;
+        return `[OUTPUT]Files matching "${globPattern}" (${relPaths.length} total${truncated ? ', showing first ' + MAX_GLOB_RESULTS : ''}):\n${display.join('\n')}[/OUTPUT]`;
+    } catch (e: any) {
+        return `[ERROR]Glob failed: ${e.message}[/ERROR]`;
+    }
+}
+
+function walkDir(dir: string, pattern?: string): string[] {
+    const results: string[] = [];
+    try {
+        const entries = fs.readdirSync(dir, { withFileTypes: true });
+        for (const entry of entries) {
+            const fullPath = path.join(dir, entry.name);
+            if (entry.name === 'node_modules' || entry.name === '.git') continue;
+            if (entry.isDirectory()) {
+                results.push(...walkDir(fullPath, pattern));
+            } else if (entry.isFile()) {
+                if (!pattern || matchGlob(entry.name, pattern) || fullPath.includes(pattern.replace(/\*/g, ''))) {
+                    results.push(fullPath);
+                }
+            }
+        }
+    } catch {}
+    return results;
+}
+
+function matchGlob(filename: string, pattern: string): boolean {
+    const reStr = '^' + pattern.replace(/\./g, '\\.').replace(/\*\*/g, '___DOUBLESTAR___').replace(/\*/g, '[^/\\\\]*').replace(/___DOUBLESTAR___/g, '.*') + '$';
+    try {
+        return new RegExp(reStr, 'i').test(filename);
+    } catch {
+        return false;
+    }
 }
 
 async function handleCompressHistory() {
@@ -902,6 +1137,329 @@ async function handleCompressHistory() {
     }
     postMessageToAllViews({ type: 'compressComplete' });
     logToFile(`[COMPRESS] compressComplete sent`);
+}
+
+async function handleBenchmark(): Promise<void> {
+    logToFile(`[BENCHMARK] Starting benchmark`);
+    if (isProcessingMessage) {
+        postMessageToAllViews({ type: 'addMessage', role: 'system', content: '⚠️ Already processing a message, please wait.' });
+        postMessageToAllViews({ type: 'benchmarkComplete' });
+        return;
+    }
+    isProcessingMessage = true;
+    let provider: AIProvider;
+    try {
+        provider = ensureProvider();
+    } catch (err: any) {
+        postMessageToAllViews({ type: 'error', text: err.message || 'Failed to initialize AI provider.' });
+        postMessageToAllViews({ type: 'benchmarkComplete' });
+        isProcessingMessage = false;
+        return;
+    }
+
+    const config = vscode.workspace.getConfiguration('local-copilot');
+    const systemPrompt = config.get<string>('systemPrompt', '');
+
+    // Read benchmark task file (extension root is one level above out/)
+    const extPath = path.resolve(__dirname, '..');
+    const taskPath = path.join(extPath, 'benchmark-task.json');
+    let task: any;
+    try {
+        const taskRaw = fs.readFileSync(taskPath, 'utf-8');
+        task = JSON.parse(taskRaw);
+    } catch {
+        postMessageToAllViews({ type: 'error', text: 'Could not load benchmark-task.json' });
+        postMessageToAllViews({ type: 'benchmarkComplete' });
+        isProcessingMessage = false;
+        return;
+    }
+
+    const benchmarkPrompt = task.prompt;
+    logToFile(`[BENCHMARK] Running task: ${task.name} (${task.id})`);
+
+    // Show the prompt in chat
+    postMessageToAllViews({
+        type: 'addMessage',
+        role: 'user',
+        content: `[BENCHMARK] ${task.name}\n\n${benchmarkPrompt}`
+    });
+
+    const messages: ChatMessage[] = [];
+    if (systemPrompt) {
+        messages.push({ role: 'system', content: systemPrompt });
+    }
+    messages.push({ role: 'user', content: benchmarkPrompt });
+
+    let fullResponse = '';
+    let responseStats: ResponseStats | undefined;
+
+    postMessageToAllViews({ type: 'startAssistantMessage' });
+
+    try {
+        const result = await provider.sendMessage(messages, (chunk: string) => {
+            fullResponse += chunk;
+            postMessageToAllViews({
+                type: 'updateAssistantMessage',
+                content: fullResponse
+            });
+        });
+        fullResponse = result.content;
+        responseStats = result.stats;
+    } catch (err: any) {
+        postMessageToAllViews({
+            type: 'finalizeAssistantMessage',
+            content: fullResponse || `❌ Benchmark failed: ${err.message}`,
+            stats: responseStats,
+            model: currentModel,
+            contextSize: currentContextSize
+        });
+        postMessageToAllViews({ type: 'benchmarkComplete' });
+        isProcessingMessage = false;
+        return;
+    }
+
+    postMessageToAllViews({
+        type: 'finalizeAssistantMessage',
+        content: fullResponse,
+        stats: responseStats,
+        model: currentModel,
+        contextSize: currentContextSize
+    });
+
+    // Save results to benchmark file
+    const benchmarkDir = path.join(extPath, 'benchmark');
+    if (!fs.existsSync(benchmarkDir)) {
+        fs.mkdirSync(benchmarkDir, { recursive: true });
+    }
+    const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+    const safeModel = currentModel.replace(/[^a-zA-Z0-9_-]/g, '_');
+    const resultFile = path.join(benchmarkDir, `result-${task.id}-${safeModel}-${timestamp}.json`);
+    const resultData = {
+        timestamp: new Date().toISOString(),
+        task: task,
+        model: currentModel,
+        provider: config.get<string>('aiProvider', 'ollama'),
+        contextSize: currentContextSize,
+        stats: responseStats,
+        prompt: benchmarkPrompt,
+        response: fullResponse
+    };
+    fs.writeFileSync(resultFile, JSON.stringify(resultData, null, 2), 'utf-8');
+    logToFile(`[BENCHMARK] Results saved to ${resultFile}`);
+
+    // Show summary in chat
+    const summaryMsg = `✅ Benchmark complete (${task.name})
+Model: ${currentModel}
+Tokens: ${responseStats?.tokenCount || 'N/A'}
+Duration: ${responseStats?.durationMs ? (responseStats.durationMs / 1000).toFixed(1) + 's' : 'N/A'}
+Results saved to: ${resultFile}`;
+    postMessageToAllViews({
+        type: 'addMessage',
+        role: 'system',
+        content: summaryMsg
+    });
+
+    postMessageToAllViews({ type: 'benchmarkComplete' });
+    isProcessingMessage = false;
+}
+
+interface BenchmarkEntry {
+    provider: string;
+    model: string;
+}
+
+async function discoverBenchmarkEntries(): Promise<BenchmarkEntry[]> {
+    const entries: BenchmarkEntry[] = [];
+
+    const discoverResults = await Promise.allSettled([
+        (async () => { const m = await fetchOllamaModels(); return m.map(model => ({ provider: 'ollama', model })); })(),
+        (async () => { const m = await fetchLMStudioModels(); return m.map(model => ({ provider: 'lmstudio', model })); })(),
+        (async () => { const m = await fetchJanAIModels(); return m.filter(model => /jan/i.test(model)).map(model => ({ provider: 'janai', model })); })(),
+    ]);
+
+    for (const r of discoverResults) {
+        if (r.status === 'fulfilled') entries.push(...r.value);
+    }
+
+    return entries;
+}
+
+async function handleBatchBenchmark(tries: number): Promise<void> {
+    logToFile(`[BATCH BENCHMARK] Starting batch benchmark, tries=${tries}`);
+
+    if (isProcessingMessage) {
+        postMessageToAllViews({ type: 'benchmarkProgress', text: 'Already processing, please wait.' });
+        postMessageToAllViews({ type: 'batchBenchmarkComplete' });
+        return;
+    }
+    isProcessingMessage = true;
+    isStreaming = true;
+
+    postMessageToAllViews({ type: 'benchmarkProgress', text: 'Discovering models from all providers...' });
+
+    const entries = await discoverBenchmarkEntries();
+    if (!isStreaming) { cleanup(); return; }
+    if (entries.length === 0) {
+        postMessageToAllViews({ type: 'benchmarkProgress', text: 'No models discovered from any provider.' });
+        cleanup(); return;
+    }
+
+    const extPath = path.resolve(__dirname, '..');
+    const inputsDir = path.join(extPath, 'benchmark-inputs');
+    if (!fs.existsSync(inputsDir)) {
+        postMessageToAllViews({ type: 'benchmarkProgress', text: `benchmark-inputs folder not found at ${inputsDir}` });
+        cleanup(); return;
+    }
+
+    const inputFiles = fs.readdirSync(inputsDir).filter(f => f.endsWith('.json'));
+    if (inputFiles.length === 0) {
+        postMessageToAllViews({ type: 'benchmarkProgress', text: 'No input files found in benchmark-inputs/' });
+        cleanup(); return;
+    }
+
+    const tasks: any[] = [];
+    for (const file of inputFiles) {
+        try {
+            const raw = fs.readFileSync(path.join(inputsDir, file), 'utf-8');
+            tasks.push(JSON.parse(raw));
+        } catch (e: any) {
+            logToFile(`[BATCH BENCHMARK] Failed to read input ${file}: ${e.message}`);
+        }
+    }
+    if (tasks.length === 0) {
+        postMessageToAllViews({ type: 'benchmarkProgress', text: 'No valid task files found in benchmark-inputs/.' });
+        cleanup(); return;
+    }
+
+    const config = vscode.workspace.getConfiguration('local-copilot');
+    const systemPrompt = config.get<string>('systemPrompt', '');
+    const benchmarkDir = path.join(extPath, 'benchmark');
+    if (!fs.existsSync(benchmarkDir)) {
+        fs.mkdirSync(benchmarkDir, { recursive: true });
+    }
+
+    let totalRuns = entries.length * tasks.length * tries;
+    let completedRuns = 0;
+    let failedRuns = 0;
+    let stoppedEarly = false;
+
+    const summaryLines: string[] = [];
+    summaryLines.push(`# Batch Benchmark Report`);
+    summaryLines.push(`Date: ${new Date().toISOString()}`);
+    summaryLines.push(`Tries per model: ${tries}`);
+    summaryLines.push(`Inputs: ${tasks.map(t => t.name).join(', ')}`);
+    summaryLines.push(`Models discovered: ${entries.length}`);
+    summaryLines.push('');
+
+    outer:
+    for (const entry of entries) {
+        if (!isStreaming) { stoppedEarly = true; break; }
+        logToFile(`[BATCH BENCHMARK] Provider=${entry.provider}, Model=${entry.model || '(default)'}`);
+
+        for (const task of tasks) {
+            if (!isStreaming) { stoppedEarly = true; break outer; }
+            for (let t = 1; t <= tries; t++) {
+                if (!isStreaming) { stoppedEarly = true; break outer; }
+
+                completedRuns++;
+                const progressText = `[${completedRuns}/${totalRuns}] ${entry.provider}/${entry.model || '(default)'} — ${task.name} (try ${t}/${tries})`;
+                postMessageToAllViews({ type: 'benchmarkProgress', text: progressText });
+                logToFile(`[BATCH BENCHMARK] ${progressText}`);
+
+                let provider: AIProvider;
+                try {
+                    provider = createAIProvider(entry.provider, entry.model || undefined);
+                    currentProvider = provider;
+                } catch (err: any) {
+                    logToFile(`[BATCH BENCHMARK] Failed to create provider ${entry.provider}: ${err.message}`);
+                    failedRuns++;
+                    continue;
+                }
+
+                const messages: ChatMessage[] = [];
+                if (systemPrompt) {
+                    messages.push({ role: 'system', content: systemPrompt });
+                }
+                messages.push({ role: 'user', content: task.prompt });
+
+                const startTime = Date.now();
+                let fullResponse = '';
+                let responseStats: ResponseStats | undefined;
+
+                try {
+                    const result = await provider.sendMessage(messages, (chunk: string) => {
+                        fullResponse += chunk;
+                    });
+                    fullResponse = result.content;
+                    responseStats = result.stats;
+                } catch (err: any) {
+                    logToFile(`[BATCH BENCHMARK] Run failed: ${err.message}`);
+                    failedRuns++;
+                    fullResponse = `[ERROR] ${err.message}`;
+                }
+
+                const durationMs = Date.now() - startTime;
+                const safeProvider = entry.provider.replace(/[^a-zA-Z0-9_-]/g, '_');
+                const safeModel = (entry.model || 'default').replace(/[^a-zA-Z0-9_-]/g, '_');
+                const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+                const resultFile = path.join(benchmarkDir, `batch-${task.id}-${safeProvider}-${safeModel}-try${t}-${timestamp}.json`);
+
+                const resultData = {
+                    timestamp: new Date().toISOString(),
+                    task: task,
+                    provider: entry.provider,
+                    model: entry.model || '',
+                    try: t,
+                    tries: tries,
+                    stats: {
+                        durationMs: durationMs,
+                        tokenCount: responseStats?.tokenCount,
+                        tokensPerSec: responseStats?.tokensPerSec,
+                        promptEvalCount: responseStats?.promptEvalCount,
+                    },
+                    prompt: task.prompt,
+                    response: fullResponse,
+                };
+                fs.writeFileSync(resultFile, JSON.stringify(resultData, null, 2), 'utf-8');
+                logToFile(`[BATCH BENCHMARK] Saved to ${resultFile}`);
+            }
+        }
+
+        summaryLines.push(`## ${entry.provider} / ${entry.model || '(default)'}`);
+        summaryLines.push(`Total: ${tries * tasks.length} runs`);
+        summaryLines.push('');
+    }
+
+    summaryLines.push(`## Summary`);
+    summaryLines.push(`Total runs: ${totalRuns}`);
+    summaryLines.push(`Completed: ${completedRuns}`);
+    summaryLines.push(`Failed: ${failedRuns}`);
+    if (stoppedEarly) summaryLines.push(`Status: **STOPPED BY USER**`);
+    summaryLines.push('');
+
+    const reportFile = path.join(benchmarkDir, `batch-report-${new Date().toISOString().replace(/[:.]/g, '-')}.md`);
+    fs.writeFileSync(reportFile, summaryLines.join('\n'), 'utf-8');
+    logToFile(`[BATCH BENCHMARK] Report saved to ${reportFile}`);
+
+    postMessageToAllViews({
+        type: 'addMessage',
+        role: 'system',
+        content: `${stoppedEarly ? '🛑' : '✅'} Batch benchmark ${stoppedEarly ? 'stopped' : 'complete'}\n\nModels tested: ${entries.length}\nInputs: ${tasks.length}\nTries per model: ${tries}\nTotal runs: ${totalRuns}\nCompleted: ${completedRuns}\nFailed: ${failedRuns}\n\nReport: ${reportFile}`
+    });
+
+    cleanup();
+
+    function cleanup() {
+        isStreaming = false;
+        isProcessingMessage = false;
+        postMessageToAllViews({ type: 'batchBenchmarkComplete' });
+    }
+}
+
+async function handleChoiceResponse(choice: string) {
+    logToFile(`[CHOICE] User selected: ${choice}`);
+    // Add the choice as a user message and continue the conversation
+    await handleSendMessage(`[User choice: ${choice}]`);
 }
 
 function buildMemoryMessages(): ChatMessage[] {
@@ -1051,10 +1609,52 @@ async function handleSendMessage(text: string) {
             // Add assistant response to history
             chatHistory.push({ role: 'assistant', content: fullResponse });
 
-            // Check for [CMD] blocks
+            // Check for [ASK] blocks — model wants to ask a question
+            const questions = extractAskBlocks(fullResponse);
+            if (questions.length > 0) {
+                postMessageToAllViews({
+                    type: 'finalizeAssistantMessage',
+                    content: fullResponse,
+                    stats: responseStats,
+                    model: currentModel,
+                    contextSize: currentContextSize
+                });
+                postMessageToAllViews({
+                    type: 'addMessage',
+                    role: 'system',
+                    content: `✋ The model is asking:\n\n${questions.join('\n\n')}\n\nType your answer and press Send to continue.`
+                });
+                break;
+            }
+
+            // Check for [CHOICES] block — model offers options
+            const choices = extractChoicesBlock(fullResponse);
+            if (choices && choices.length > 0) {
+                postMessageToAllViews({
+                    type: 'finalizeAssistantMessage',
+                    content: fullResponse,
+                    stats: responseStats,
+                    model: currentModel,
+                    contextSize: currentContextSize
+                });
+                postMessageToAllViews({
+                    type: 'choiceRequest',
+                    id: 'choice-' + (++approvalIdCounter),
+                    choices: choices
+                });
+                break;
+            }
+
+            // Extract all block types
             const commands = extractCmdBlocks(fullResponse);
-            if (commands.length === 0) {
-                // No commands - finalize and done
+            const reads = extractReadBlocks(fullResponse);
+            const writes = extractWriteBlocks(fullResponse);
+            const searches = extractSearchBlocks(fullResponse);
+            const files = extractFilesBlocks(fullResponse);
+            const hasBlocks = commands.length > 0 || reads.length > 0 || writes.length > 0 || searches.length > 0 || files.length > 0;
+
+            if (!hasBlocks) {
+                // No blocks - finalize and done
                 postMessageToAllViews({
                     type: 'finalizeAssistantMessage',
                     content: fullResponse,
@@ -1065,7 +1665,7 @@ async function handleSendMessage(text: string) {
                 break;
             }
 
-            // Has commands - finalize the current response, then execute
+            // Has blocks - finalize the current response, then execute
             postMessageToAllViews({
                 type: 'finalizeAssistantMessage',
                 content: fullResponse,
@@ -1074,49 +1674,54 @@ async function handleSendMessage(text: string) {
                 contextSize: currentContextSize
             });
 
-            // Execute each command and collect output
+            // Execute all blocks and collect output
             let outputMessage = '';
+
             for (const command of commands) {
                 if (!isStreaming) break;
-
                 const allowed = await shouldExecuteCommand(command);
                 if (!allowed) {
                     outputMessage += `Command: ${command}\nResult:\n[OUTPUT](denied by user)[/OUTPUT]\n\n`;
-                    postMessageToAllViews({
-                        type: 'addCommandOutput',
-                        output: `$ ${command}\n(denied by user)`,
-                        success: false
-                    });
+                    postMessageToAllViews({ type: 'addCommandOutput', output: `$ ${command}\n(denied by user)`, success: false });
                     continue;
                 }
-
-                postMessageToAllViews({
-                    type: 'executingCommand',
-                    command: command
-                });
-
+                postMessageToAllViews({ type: 'executingCommand', command });
                 const { stdout, stderr, exitCode } = await executeCommandWithOutput(command);
-
                 logToFile(`[CMD] ${command}\nexit: ${exitCode}\nstdout: ${stdout || '(empty)'}\nstderr: ${stderr || '(empty)'}`);
-
                 let outputBlock = '';
-                if (stdout) {
-                    outputBlock += `[OUTPUT]${stdout}[/OUTPUT]`;
-                }
-                if (stderr) {
-                    outputBlock += `[ERROR]${stderr}[/ERROR]`;
-                }
-                if (!stdout && !stderr) {
-                    outputBlock = exitCode === 0 ? '[OUTPUT](no output)[/OUTPUT]' : `[ERROR]Exit code: ${exitCode}[/ERROR]`;
-                }
-
+                if (stdout) outputBlock += `[OUTPUT]${stdout}[/OUTPUT]`;
+                if (stderr) outputBlock += `[ERROR]${stderr}[/ERROR]`;
+                outputBlock ||= exitCode === 0 ? '[OUTPUT](no output)[/OUTPUT]' : `[ERROR]Exit code: ${exitCode}[/ERROR]`;
                 outputMessage += `Command: ${command}\nResult:\n${outputBlock}\n\n`;
+                postMessageToAllViews({ type: 'addCommandOutput', output: `$ ${command}\n${stdout || stderr || '(no output)'}`, success: exitCode === 0 });
+            }
 
-                postMessageToAllViews({
-                    type: 'addCommandOutput',
-                    output: `$ ${command}\n${stdout || stderr || '(no output)'}`,
-                    success: exitCode === 0
-                });
+            for (const filePath of reads) {
+                if (!isStreaming) break;
+                postMessageToAllViews({ type: 'addMessage', role: 'system', content: `📖 Reading: ${filePath}` });
+                const result = await handleReadFile(filePath);
+                outputMessage += `Read: ${filePath}\nResult:\n${result}\n\n`;
+            }
+
+            for (const w of writes) {
+                if (!isStreaming) break;
+                postMessageToAllViews({ type: 'addMessage', role: 'system', content: `📝 Writing: ${w.path}` });
+                const result = await handleWriteFile(w.path, w.content);
+                outputMessage += `Write: ${w.path}\nResult:\n${result}\n\n`;
+            }
+
+            for (const pattern of searches) {
+                if (!isStreaming) break;
+                postMessageToAllViews({ type: 'addMessage', role: 'system', content: `🔍 Searching: ${pattern}` });
+                const result = await handleSearchFiles(pattern);
+                outputMessage += `Search: ${pattern}\nResult:\n${result}\n\n`;
+            }
+
+            for (const globPattern of files) {
+                if (!isStreaming) break;
+                postMessageToAllViews({ type: 'addMessage', role: 'system', content: `📁 Files: ${globPattern}` });
+                const result = await handleGlobFiles(globPattern);
+                outputMessage += `Files: ${globPattern}\nResult:\n${result}\n\n`;
             }
 
             if (!isStreaming) break;

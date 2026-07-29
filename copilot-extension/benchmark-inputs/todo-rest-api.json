@@ -1,0 +1,6 @@
+{
+    "id": "todo-rest-api",
+    "name": "Todo REST API with Express.js",
+    "description": "Build a complete REST API for a todo list application.",
+    "prompt": "Create a complete REST API for a todo list application using Express.js and an in-memory store. Requirements:\n\n1. Express.js server on port 3000\n2. In-memory array store (no database)\n3. CRUD endpoints:\n   - GET /todos - list all todos (support ?completed=true/false filter)\n   - GET /todos/:id - get single todo\n   - POST /todos - create todo (validate: title required, string, 1-100 chars)\n   - PUT /todos/:id - update todo (validate fields)\n   - DELETE /todos/:id - delete todo\n4. Each todo: { id, title, completed (bool, default false), createdAt, updatedAt }\n5. Proper error handling with HTTP status codes (400, 404, 500)\n6. Input validation on all write endpoints\n7. CORS enabled for all origins\n8. JSON request/response everywhere\n9. Export the app (not just listen) for testability\n10. Include a complete test file using supertest that covers all endpoints including error cases.\n\nOutput ONLY the complete source code with no explanation. Use modern JavaScript (ES2020+). Include proper error handling, input validation, and clean code structure."
+}
