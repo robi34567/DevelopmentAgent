@@ -28,9 +28,165 @@
     var saveSessionBtn = document.getElementById('save-session-btn');
     var isProcessing = false;
     var currentAssistantMessage = null;
+    var currentThinkingEl = null;
+    var showThinking = true;
     var debugElOriginal = debugEl ? debugEl.outerHTML : '';
     var cmdHistory = [];
     var cmdHistoryPos = -1;
+    var pendingImages = [];
+
+    function dataUrlToBlob(dataUrl) {
+        var parts = dataUrl.split(',');
+        var mime = parts[0].match(/:(.*?);/)[1];
+        var bytes = atob(parts[1]);
+        var arr = new Uint8Array(bytes.length);
+        for (var i = 0; i < bytes.length; i++) arr[i] = bytes.charCodeAt(i);
+        return new Blob([arr], { type: mime });
+    }
+
+    function createImagePreview(src, mimeType) {
+        vscode.postMessage({ type: 'log', text: 'createImagePreview called, src length=' + src.length + ' mimeType=' + mimeType });
+        var container = document.getElementById('image-preview-container');
+        vscode.postMessage({ type: 'log', text: 'container found: ' + (!!container) });
+        if (!container) {
+            vscode.postMessage({ type: 'log', text: 'ERROR: image-preview-container not found in DOM' });
+            return;
+        }
+        var wrapper = document.createElement('div');
+        wrapper.className = 'image-preview-wrapper';
+        var img = document.createElement('img');
+        img.src = src;
+        img.className = 'image-preview-thumb';
+        img.onerror = function() {
+            vscode.postMessage({ type: 'log', text: 'img.onerror fired, could not load preview' });
+            wrapper.innerHTML = '<span style="font-size:10px;color:var(--vscode-errorForeground);padding:4px;">Error</span>';
+        };
+        var removeBtn = document.createElement('button');
+        removeBtn.className = 'image-preview-remove';
+        removeBtn.innerHTML = '&times;';
+        removeBtn.title = 'Remove image';
+        (function(imgSrc, imgMime) {
+            removeBtn.addEventListener('click', function() {
+                wrapper.remove();
+                pendingImages = pendingImages.filter(function(p) { return p.base64 !== imgSrc.split(',')[1]; });
+                if (pendingImages.length === 0) {
+                    container.style.display = 'none';
+                }
+            });
+        })(src, mimeType);
+        wrapper.appendChild(img);
+        wrapper.appendChild(removeBtn);
+        container.appendChild(wrapper);
+        container.style.display = 'flex';
+        vscode.postMessage({ type: 'log', text: 'preview appended to container' });
+    }
+
+    function addPendingImage(dataUrl, mimeType) {
+        vscode.postMessage({ type: 'log', text: 'addPendingImage called, dataUrl length=' + dataUrl.length + ' mimeType=' + mimeType });
+        var base64 = dataUrl.split(',')[1];
+        vscode.postMessage({ type: 'log', text: 'base64 length=' + base64.length });
+        pendingImages.push({ base64: base64, mimeType: mimeType });
+        vscode.postMessage({ type: 'log', text: 'pendingImages count: ' + pendingImages.length });
+        createImagePreview(dataUrl, mimeType);
+    }
+
+    function readClipboardImageBlob(blob) {
+        vscode.postMessage({ type: 'log', text: 'readClipboardImageBlob called size=' + blob.size + ' type=' + blob.type });
+        var allowedMime = ['image/png', 'image/jpeg', 'image/gif', 'image/webp', 'image/bmp'];
+        if (allowedMime.indexOf(blob.type) === -1) {
+            vscode.postMessage({ type: 'log', text: 'unsupported mime: ' + blob.type });
+            addMessage('system', '⚠️ Unsupported image format: ' + blob.type + '. Please use PNG or JPEG.');
+            return;
+        }
+        if (blob.size > 10 * 1024 * 1024) {
+            vscode.postMessage({ type: 'log', text: 'image too large: ' + blob.size });
+            addMessage('system', '⚠️ Image too large (max 10MB).');
+            return;
+        }
+        vscode.postMessage({ type: 'log', text: 'validation passed, starting FileReader' });
+        var reader = new FileReader();
+        reader.onload = function(ev) {
+            vscode.postMessage({ type: 'log', text: 'FileReader onload fired, result length: ' + (ev.target.result ? ev.target.result.length : 0) });
+            addPendingImage(ev.target.result, blob.type);
+        };
+        reader.onerror = function(ev) {
+            vscode.postMessage({ type: 'log', text: 'FileReader onerror: ' + (ev.target ? ev.target.error ? ev.target.error.message : 'unknown' : 'no target') });
+            addMessage('system', '⚠️ Failed to read image from clipboard.');
+        };
+        reader.readAsDataURL(blob);
+        vscode.postMessage({ type: 'log', text: 'readAsDataURL called' });
+    }
+
+    function readClipboardViaNavigator() {
+        try {
+            navigator.clipboard.read().then(function(items) {
+                console.log('[Local Copilot navigator.clipboard.read] Got', items.length, 'items');
+                for (var ci = 0; ci < items.length; ci++) {
+                    console.log('[Local Copilot navigator.clipboard.read] Item', ci, 'types:', items[ci].types.join(', '));
+                    var types = items[ci].types;
+                    for (var ti = 0; ti < types.length; ti++) {
+                        if (types[ti].startsWith('image/')) {
+                            console.log('[Local Copilot navigator.clipboard.read] Found image type:', types[ti]);
+                            items[ci].getType(types[ti]).then(function(blob) {
+                                console.log('[Local Copilot navigator.clipboard.read] Got blob, size:', blob.size, 'type:', blob.type);
+                                readClipboardImageBlob(blob);
+                                if (messageInput.value.trim()) {
+                                    messageInput.value = '';
+                                    messageInput.style.height = 'auto';
+                                }
+                            }).catch(function(err) {
+                                console.log('[Local Copilot navigator.clipboard.read] getType error:', err);
+                            });
+                            return;
+                        }
+                    }
+                }
+                console.log('[Local Copilot navigator.clipboard.read] No image found in any item');
+            }).catch(function(err) {
+                console.log('[Local Copilot navigator.clipboard.read] read() failed:', err.message || err);
+            });
+        } catch(e) {
+            console.log('[Local Copilot navigator.clipboard.read] Exception:', e.message || e);
+        }
+    }
+
+    messageInput.addEventListener('paste', function(e) {
+        vscode.postMessage({ type: 'log', text: 'paste event fired' });
+        var items = e.clipboardData.items;
+        vscode.postMessage({ type: 'log', text: 'items count: ' + (items ? items.length : 0) });
+        for (var i = 0; i < items.length; i++) {
+            vscode.postMessage({ type: 'log', text: 'item ' + i + ' type=' + items[i].type + ' kind=' + items[i].kind });
+        }
+        if (e.clipboardData.types) {
+            vscode.postMessage({ type: 'log', text: 'types: ' + Array.from(e.clipboardData.types).join(', ') });
+        }
+        if (e.clipboardData.files && e.clipboardData.files.length > 0) {
+            vscode.postMessage({ type: 'log', text: 'files count: ' + e.clipboardData.files.length });
+        }
+        var imgItem = null;
+        for (var i = 0; i < items.length; i++) {
+            if (items[i].type.startsWith('image/')) {
+                imgItem = items[i];
+                break;
+            }
+        }
+        if (imgItem) {
+            vscode.postMessage({ type: 'log', text: 'found image item: ' + imgItem.type });
+            e.preventDefault();
+            var file = imgItem.getAsFile();
+            if (file) {
+                vscode.postMessage({ type: 'log', text: 'got file size=' + file.size + ' type=' + file.type });
+                readClipboardImageBlob(file);
+            } else {
+                vscode.postMessage({ type: 'log', text: 'getAsFile returned null' });
+            }
+            return;
+        }
+        vscode.postMessage({ type: 'log', text: 'no image in items, trying fallbacks' });
+        readClipboardViaNavigator();
+        vscode.postMessage({ type: 'log', text: 'sending readClipboardImage' });
+        vscode.postMessage({ type: 'readClipboardImage' });
+    });
 
     function saveChatState() {
         var html = chatContainer.innerHTML;
@@ -75,11 +231,14 @@
     compressBtn.addEventListener('click', compressHistory);
     benchmarkBtn.addEventListener('click', runBenchmark);
     batchBenchmarkBtn.addEventListener('click', runBatchBenchmark);
+    document.getElementById('thinking-toggle').addEventListener('click', function() {
+        vscode.postMessage({ type: 'toggleThinking' });
+    });
 
     providerSelect.addEventListener('change', function() {
         vscode.postMessage({ type: 'changeProvider', provider: this.value });
         modelSelect.innerHTML = '<option value="">Loading models...</option>';
-        if (this.value === 'ollama' || this.value === 'lmstudio' || this.value === 'janai') {
+        if (this.value === 'ollama' || this.value === 'lmstudio' || this.value === 'janai' || this.value === 'vscode-lm') {
             modelSelect.style.display = '';
             vscode.postMessage({ type: 'fetchModels', provider: this.value });
         } else {
@@ -158,16 +317,26 @@
         if (!text || isProcessing) return;
         cmdHistory.push(text);
         cmdHistoryPos = -1;
-        addMessage('user', text);
+        vscode.postMessage({ type: 'saveCmdHistory', history: cmdHistory });
+        var displayText = text;
+        if (pendingImages.length > 0) {
+            displayText += '\n\n[' + pendingImages.length + ' image(s) attached]';
+        }
+        addMessage('user', displayText);
         messageInput.value = '';
         messageInput.style.height = 'auto';
+        var imgs = pendingImages.slice();
+        pendingImages = [];
+        var container = document.getElementById('image-preview-container');
+        container.innerHTML = '';
+        container.style.display = 'none';
         var welcome = chatContainer.querySelector('.welcome-message');
         if (welcome) welcome.remove();
         showTypingIndicator();
         isProcessing = true;
         sendBtn.disabled = true;
         stopBtn.disabled = false;
-        vscode.postMessage({ type: 'sendMessage', text: text });
+        vscode.postMessage({ type: 'sendMessage', text: text, images: imgs });
     }
 
     function stopGeneration() {
@@ -242,6 +411,9 @@
 
     function parseContent(content) {
         var escaped = escapeHtml(content);
+        escaped = escaped.replace(/!\[image\]\(data:(image\/[^;]+);base64,([^)]+)\)/g, function(m, mime, b64) {
+            return '<img src="data:' + mime + ';base64,' + b64 + '" class="chat-image" alt="Image">';
+        });
         escaped = escaped.replace(/\[READ\]([\s\S]*?)\[\/READ\]/g, function(m, p) {
             return '<div class="cmd-block"><span class="cmd-label">&#128196; Read</span><div class="cmd-text">' + escapeHtml(p.trim()) + '</div></div>';
         });
@@ -327,7 +499,7 @@
         chatContainer.scrollTop = chatContainer.scrollHeight;
     }
 
-    function finalizeAssistantMessage(content, messageId, stats, modelName, contextSize) {
+    function finalizeAssistantMessage(content, messageId, stats, modelName, contextSize, thinking) {
         hideTypingIndicator();
         if (debugEl) debugEl.textContent = 'Response complete';
         if (currentAssistantMessage && chatContainer.contains(currentAssistantMessage)) {
@@ -360,9 +532,15 @@
                 parsed += '<div class="response-stats">' + statsHtml + '</div>';
             }
             currentAssistantMessage.innerHTML = parsed;
+            if (thinking && showThinking) {
+                appendThinkingToMessage(currentAssistantMessage, thinking);
+            }
         } else {
             var msg = addMessage('assistant', content, messageId);
             if (msg) {
+                if (thinking && showThinking) {
+                    appendThinkingToMessage(msg, thinking);
+                }
                 var statsDiv = document.createElement('div');
                 statsDiv.className = 'response-stats';
                 var parts = [];
@@ -391,10 +569,55 @@
             }
         }
         currentAssistantMessage = null;
+        currentThinkingEl = null;
         isProcessing = false;
         sendBtn.disabled = false;
         stopBtn.disabled = true;
         saveChatState();
+    }
+
+    function appendThinkingToMessage(msgEl, thinking) {
+        var existing = msgEl.querySelector('.thinking-block');
+        if (existing) { existing.remove(); }
+        var details = document.createElement('details');
+        details.className = 'thinking-block';
+        details.open = showThinking;
+        var summary = document.createElement('summary');
+        summary.className = 'thinking-summary';
+        summary.textContent = '\u{1F9E0} Thinking';
+        details.appendChild(summary);
+        var contentDiv = document.createElement('div');
+        contentDiv.className = 'thinking-content';
+        contentDiv.textContent = thinking;
+        details.appendChild(contentDiv);
+        msgEl.insertBefore(details, msgEl.firstChild);
+        currentThinkingEl = details;
+    }
+
+    function updateThinkingContent(content) {
+        hideTypingIndicator();
+        if (debugEl) debugEl.textContent = 'Model thinking...';
+        var msgEl = currentAssistantMessage;
+        if (!msgEl || !chatContainer.contains(msgEl)) {
+            msgEl = addMessage('assistant', '', null);
+            currentAssistantMessage = msgEl;
+        }
+        var existing = msgEl.querySelector('.thinking-block');
+        if (existing) {
+            var contentDiv = existing.querySelector('.thinking-content');
+            if (contentDiv) contentDiv.textContent = content;
+        } else {
+            appendThinkingToMessage(msgEl, content);
+        }
+        chatContainer.scrollTop = chatContainer.scrollHeight;
+    }
+
+    function clearThinkingContent() {
+        var els = chatContainer.querySelectorAll('.thinking-block');
+        for (var ti = 0; ti < els.length; ti++) {
+            els[ti].remove();
+        }
+        currentThinkingEl = null;
     }
 
     function formatCtx(n) {
@@ -414,7 +637,7 @@
                     updateAssistantMessage(message.content, message.messageId);
                     break;
                 case 'finalizeAssistantMessage':
-                    finalizeAssistantMessage(message.content, message.messageId, message.stats, message.model, message.contextSize);
+                    finalizeAssistantMessage(message.content, message.messageId, message.stats, message.model, message.contextSize, message.thinking);
                     break;
                 case 'addCommandOutput':
                     // Remove any executing indicator
@@ -461,7 +684,7 @@
                 case 'setProvider':
                     providerSelect.value = message.provider;
                     modelSelect.innerHTML = '<option value="">Loading models...</option>';
-                    if (message.provider === 'ollama' || message.provider === 'lmstudio' || message.provider === 'janai') {
+                    if (message.provider === 'ollama' || message.provider === 'lmstudio' || message.provider === 'janai' || message.provider === 'vscode-lm') {
                         modelSelect.style.display = '';
                         vscode.postMessage({ type: 'fetchModels', provider: message.provider });
                     } else {
@@ -483,6 +706,7 @@
                         chatContainer.innerHTML = message.html;
                         debugEl = document.getElementById('debug-status');
                     }
+                    chatContainer.scrollTop = chatContainer.scrollHeight;
                     break;
                 case 'setApproval':
                     approvalSelect.value = message.mode;
@@ -525,7 +749,7 @@
                     welcome.innerHTML = '<h2>Welcome to Local Copilot</h2>' +
                         '<p>Your AI assistant with local command execution capabilities.</p>' +
                         '<div class="features">' +
-                        '<div class="feature"><span class="check">&#10003;</span> Chat with AI models (Ollama, LM Studio, JAN AI, OpenAI, Copilot)</div>' +
+                        '<div class="feature"><span class="check">&#10003;</span> Chat with AI models (Ollama, LM Studio, JAN AI, OpenAI, Copilot, VS Code LM)</div>' +
                         '<div class="feature"><span class="check">&#10003;</span> Execute commands directly in VS Code terminal</div>' +
                         '<div class="feature"><span class="check">&#10003;</span> Read and analyze files in your workspace</div>' +
                         '<div class="feature"><span class="check">&#10003;</span> Install packages and run scripts</div>' +
@@ -558,6 +782,12 @@
                         welcome2.className = 'welcome-message';
                         welcome2.innerHTML = '<h2>Welcome to Local Copilot</h2>' +
                             '<p>Your AI assistant with local command execution capabilities.</p>' +
+                            '<div class="features">' +
+                            '<div class="feature"><span class="check">&#10003;</span> Chat with AI models (Ollama, LM Studio, JAN AI, OpenAI, Copilot, VS Code LM)</div>' +
+                            '<div class="feature"><span class="check">&#10003;</span> Execute commands directly in VS Code terminal</div>' +
+                            '<div class="feature"><span class="check">&#10003;</span> Read and analyze files in your workspace</div>' +
+                            '<div class="feature"><span class="check">&#10003;</span> Install packages and run scripts</div>' +
+                            '</div>' +
                             '<p style="margin-top: 16px; font-size: 12px;">Type a message below to get started!</p>';
                         chatContainer.appendChild(welcome2);
                     }
@@ -597,6 +827,17 @@
                     stopBtn.disabled = true;
                     hideTypingIndicator();
                     break;
+                case 'clipboardImage':
+                    console.log('[Local Copilot] Received clipboardImage from extension, has base64:', !!message.base64, 'mimeType:', message.mimeType);
+                    if (message.base64 && message.mimeType) {
+                        addPendingImage('data:' + message.mimeType + ';base64,' + message.base64, message.mimeType);
+                        if (messageInput.value.trim()) {
+                            console.log('[Local Copilot] Clearing auto-inserted text:', messageInput.value);
+                            messageInput.value = '';
+                            messageInput.style.height = 'auto';
+                        }
+                    }
+                    break;
                 case 'compressComplete':
                     compressBtn.disabled = false;
                     compressBtn.textContent = 'Compress';
@@ -624,6 +865,12 @@
                     progEl.innerHTML = escapeHtml(message.text).replace(/\n/g, '<br>');
                     chatContainer.scrollTop = chatContainer.scrollHeight;
                     break;
+                case 'cmdHistory':
+                    if (message.history && message.history.length > 0) {
+                        cmdHistory = message.history;
+                        cmdHistoryPos = -1;
+                    }
+                    break;
                 case 'clearAndShowCompressed':
                     chatContainer.innerHTML = '';
                     if (debugEl) chatContainer.appendChild(debugEl);
@@ -637,6 +884,24 @@
                     chatContainer.scrollTop = chatContainer.scrollHeight;
                     saveChatState();
                     break;
+                case 'updateThinkingContent':
+                    updateThinkingContent(message.content);
+                    break;
+                case 'clearThinkingContent':
+                    clearThinkingContent();
+                    break;
+                case 'thinkingToggled':
+                    showThinking = message.show;
+                    var thinkingToggle = document.getElementById('thinking-toggle');
+                    if (thinkingToggle) {
+                        thinkingToggle.textContent = showThinking ? '🧠 Thinking ON' : '🧠 Thinking OFF';
+                        thinkingToggle.classList.toggle('active', showThinking);
+                    }
+                    var allThinking = chatContainer.querySelectorAll('.thinking-block');
+                    for (var ti = 0; ti < allThinking.length; ti++) {
+                        allThinking[ti].open = showThinking;
+                    }
+                    break;
             }
         } catch(e) {
             addMessage('system', 'Internal error handling message: ' + e.message);
@@ -648,10 +913,12 @@
     stopBtn.disabled = true;
 
     vscode.postMessage({ type: 'getChatState' });
+    vscode.postMessage({ type: 'getCmdHistory' });
     vscode.postMessage({ type: 'getApproval' });
     vscode.postMessage({ type: 'getSessions' });
+    vscode.postMessage({ type: 'getThinkingState' });
 
-    if (providerSelect.value === 'ollama' || providerSelect.value === 'lmstudio' || providerSelect.value === 'janai') {
+    if (providerSelect.value === 'ollama' || providerSelect.value === 'lmstudio' || providerSelect.value === 'janai' || providerSelect.value === 'vscode-lm') {
         modelSelect.style.display = '';
         vscode.postMessage({ type: 'fetchModels' });
     }

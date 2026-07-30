@@ -17,6 +17,8 @@ let currentContextSize: number = 0;
 let chatHistory: ChatMessage[] = [];
 let isStreaming = false;
 let isProcessingMessage = false;
+let showThinking = true;
+let currentThinking = '';
 let logDir: string = '';
 let workspaceState: vscode.Memento | undefined;
 let approvalMode: string = 'safe';
@@ -522,7 +524,7 @@ class SidebarProvider implements vscode.WebviewViewProvider {
         const config = vscode.workspace.getConfiguration('local-copilot');
         const currentProviderType = config.get<string>('aiProvider', 'ollama');
         webviewView.webview.postMessage({ type: 'setProvider', provider: currentProviderType });
-        if (currentProviderType === 'ollama' || currentProviderType === 'lmstudio' || currentProviderType === 'janai') {
+        if (currentProviderType === 'ollama' || currentProviderType === 'lmstudio' || currentProviderType === 'janai' || currentProviderType === 'vscode-lm') {
             handleFetchModels(currentProviderType);
         }
 
@@ -534,7 +536,7 @@ class SidebarProvider implements vscode.WebviewViewProvider {
                     try {
                         switch (message.type) {
                             case 'sendMessage':
-                                await handleSendMessage(message.text);
+                                await handleSendMessage(message.text, message.images);
                                 break;
                             case 'stopGeneration':
                                 handleStopGeneration();
@@ -597,6 +599,31 @@ class SidebarProvider implements vscode.WebviewViewProvider {
                             case 'choiceResponse':
                                 await handleChoiceResponse(message.choice);
                                 break;
+                            case 'toggleThinking':
+                                showThinking = !showThinking;
+                                workspaceState?.update('showThinking', showThinking);
+                                postMessageToAllViews({ type: 'thinkingToggled', show: showThinking });
+                                if (!showThinking) {
+                                    postMessageToAllViews({ type: 'clearThinkingContent' });
+                                }
+                                break;
+                            case 'getThinkingState':
+                                webviewView.webview.postMessage({ type: 'thinkingToggled', show: showThinking });
+                                break;
+                            case 'log':
+                                logToFile('[WEBVIEW] ' + (message.text || ''));
+                                break;
+                            case 'saveCmdHistory':
+                                workspaceState?.update('cmdHistory', message.history);
+                                break;
+                            case 'getCmdHistory':
+                                const savedHistory = workspaceState?.get<string[]>('cmdHistory', []);
+                                webviewView.webview.postMessage({ type: 'cmdHistory', history: savedHistory });
+                                break;
+                            case 'readClipboardImage':
+                                logToFile('[CLIPBOARD] Sidebar received readClipboardImage message');
+                                await handleReadClipboardImage();
+                                break;
                         }
                     } catch (err: any) {
                         console.error('[Local Copilot] Sidebar message handler error:', err);
@@ -620,6 +647,7 @@ export function activate(context: vscode.ExtensionContext) {
     console.log('Local Copilot extension is now active!');
     workspaceState = context.workspaceState;
     approvalMode = getApprovalMode();
+    showThinking = workspaceState?.get<boolean>('showThinking', true) ?? true;
 
     // Initialize session: restore last active session or create a new one
     const lastActiveId = workspaceState?.get<string>('activeSessionId', '') || '';
@@ -693,6 +721,17 @@ export function activate(context: vscode.ExtensionContext) {
     context.subscriptions.push(runInTerminalCommand);
     context.subscriptions.push(configureOllamaCommand);
 
+    // Register the toggle thinking command
+    const toggleThinkingCommand = vscode.commands.registerCommand('local-copilot.toggleThinking', () => {
+        showThinking = !showThinking;
+        workspaceState?.update('showThinking', showThinking);
+        postMessageToAllViews({ type: 'thinkingToggled', show: showThinking });
+        if (!showThinking) {
+            postMessageToAllViews({ type: 'clearThinkingContent' });
+        }
+    });
+    context.subscriptions.push(toggleThinkingCommand);
+
     // Register a status bar item
     const statusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);
     statusBarItem.text = "$(comment-discussion) Local Copilot";
@@ -728,7 +767,7 @@ function createOrShowChatPanel(context: vscode.ExtensionContext) {
         const cfg = vscode.workspace.getConfiguration('local-copilot');
         const provType = cfg.get<string>('aiProvider', 'ollama');
         currentPanel.webview.postMessage({ type: 'setProvider', provider: provType });
-        if (provType === 'ollama' || provType === 'lmstudio' || provType === 'janai') {
+        if (provType === 'ollama' || provType === 'lmstudio' || provType === 'janai' || provType === 'vscode-lm') {
             handleFetchModels(provType);
         }
     }
@@ -740,7 +779,7 @@ function createOrShowChatPanel(context: vscode.ExtensionContext) {
             try {
                 switch (message.type) {
                     case 'sendMessage':
-                        await handleSendMessage(message.text);
+                        await handleSendMessage(message.text, message.images);
                         break;
                     case 'stopGeneration':
                         handleStopGeneration();
@@ -803,6 +842,31 @@ function createOrShowChatPanel(context: vscode.ExtensionContext) {
                     case 'choiceResponse':
                         await handleChoiceResponse(message.choice);
                         break;
+                    case 'toggleThinking':
+                        showThinking = !showThinking;
+                        workspaceState?.update('showThinking', showThinking);
+                        postMessageToAllViews({ type: 'thinkingToggled', show: showThinking });
+                        if (!showThinking) {
+                            postMessageToAllViews({ type: 'clearThinkingContent' });
+                        }
+                        break;
+                    case 'log':
+                        logToFile('[WEBVIEW] ' + (message.text || ''));
+                        break;
+                    case 'saveCmdHistory':
+                        workspaceState?.update('cmdHistory', message.history);
+                        break;
+                    case 'getCmdHistory':
+                        const panelSavedHistory = workspaceState?.get<string[]>('cmdHistory', []);
+                        currentPanel?.webview.postMessage({ type: 'cmdHistory', history: panelSavedHistory });
+                        break;
+                    case 'readClipboardImage':
+                        logToFile('[CLIPBOARD] Panel received readClipboardImage message');
+                        await handleReadClipboardImage();
+                        break;
+                    case 'getThinkingState':
+                        currentPanel?.webview.postMessage({ type: 'thinkingToggled', show: showThinking });
+                        break;
                 }
             } catch (err: any) {
                 console.error('[Local Copilot] Panel message handler error:', err);
@@ -826,7 +890,7 @@ function ensureProvider(): AIProvider {
     if (!currentProvider) {
         const config = vscode.workspace.getConfiguration('local-copilot');
         const provType = config.get<string>('aiProvider', 'ollama');
-        currentModel = provType === 'lmstudio' ? config.get<string>('lmstudioModel', '') : provType === 'janai' ? config.get<string>('janaiModel', '') : config.get<string>('ollamaModel', 'qwen2.5-coder:3b');
+        currentModel = provType === 'lmstudio' ? config.get<string>('lmstudioModel', '') : provType === 'janai' ? config.get<string>('janaiModel', '') : provType === 'vscode-lm' ? config.get<string>('vscodeLmModel', '') : config.get<string>('ollamaModel', 'qwen2.5-coder:3b');
         currentProvider = createAIProvider(provType, currentModel || undefined);
     }
     return currentProvider;
@@ -874,7 +938,7 @@ async function compressChatHistory(provider: AIProvider, manual: boolean = false
         },
         {
             role: 'user',
-            content: `Summarize the following conversation. Preserve ALL key information: file paths, code changes, commands run, errors encountered, decisions made, user preferences, and any other context needed to continue the conversation seamlessly.\n\n${msgsToCompress.map(m => `${m.role === 'user' ? 'User' : 'Assistant'}: ${m.content}`).join('\n\n')}`
+            content: `Summarize the following conversation. Preserve ALL key information: file paths, code changes, commands run, errors encountered, decisions made, user preferences, and any other context needed to continue the conversation seamlessly.\n\n${msgsToCompress.map(m => `${m.role === 'user' ? 'User' : 'Assistant'}: ${m.content}${m.images && m.images.length > 0 ? ' [attached ' + m.images.length + ' image(s)]' : ''}`).join('\n\n')}`
         }
     ];
 
@@ -1275,6 +1339,7 @@ async function discoverBenchmarkEntries(): Promise<BenchmarkEntry[]> {
         (async () => { const m = await fetchOllamaModels(); return m.map(model => ({ provider: 'ollama', model })); })(),
         (async () => { const m = await fetchLMStudioModels(); return m.map(model => ({ provider: 'lmstudio', model })); })(),
         (async () => { const m = await fetchJanAIModels(); return m.filter(model => /jan/i.test(model)).map(model => ({ provider: 'janai', model })); })(),
+        (async () => { const m = await fetchVSCodeLMModels(); return m.map(model => ({ provider: 'vscode-lm', model })); })(),
     ]);
 
     for (const r of discoverResults) {
@@ -1538,8 +1603,8 @@ async function handleMemorize(text: string, isGlobal: boolean): Promise<void> {
     }
 }
 
-async function handleSendMessage(text: string) {
-    console.log('[Local Copilot] handleSendMessage called with:', text.substring(0, 100));
+async function handleSendMessage(text: string, images?: { base64: string; mimeType: string }[]) {
+    console.log('[Local Copilot] handleSendMessage called with:', text.substring(0, 100), images ? `(${images.length} images)` : '');
 
     // Handle slash commands
     if (text.startsWith('/memorize_global')) {
@@ -1571,7 +1636,14 @@ async function handleSendMessage(text: string) {
     const systemPrompt = config.get<string>('systemPrompt', '');
 
     // Add user message to history
-    chatHistory.push({ role: 'user', content: text });
+    const userMsg: ChatMessage = { role: 'user', content: text };
+    const curProvider = config.get<string>('aiProvider', 'ollama');
+    logToFile(`[SEND] curProvider=${curProvider} images=${images?.length || 0}`);
+    if (images && images.length > 0) {
+        userMsg.images = images;
+        logToFile(`[SEND] attached ${images.length} images to user message`);
+    }
+    chatHistory.push(userMsg);
 
     isStreaming = true;
 
@@ -1590,8 +1662,10 @@ async function handleSendMessage(text: string) {
 
             let fullResponse = '';
             let responseStats: ResponseStats | undefined;
+            currentThinking = '';
 
             logModelCall(messages, round);
+            logToFile(`[SEND] messages[last] images=${messages[messages.length-1]?.images?.length || 0} content=${messages[messages.length-1]?.content?.substring(0, 50)}`);
 
             const result = await provider.sendMessage(messages, (chunk: string) => {
                 fullResponse += chunk;
@@ -1599,10 +1673,19 @@ async function handleSendMessage(text: string) {
                     type: 'updateAssistantMessage',
                     content: fullResponse
                 });
+            }, (thinkingChunk: string) => {
+                currentThinking += thinkingChunk;
+                if (showThinking) {
+                    postMessageToAllViews({
+                        type: 'updateThinkingContent',
+                        content: currentThinking
+                    });
+                }
             });
 
             fullResponse = result.content;
             responseStats = result.stats;
+            const finalThinking = result.thinking;
 
             logModelResponse(fullResponse, responseStats);
 
@@ -1617,7 +1700,8 @@ async function handleSendMessage(text: string) {
                     content: fullResponse,
                     stats: responseStats,
                     model: currentModel,
-                    contextSize: currentContextSize
+                    contextSize: currentContextSize,
+                    thinking: finalThinking
                 });
                 postMessageToAllViews({
                     type: 'addMessage',
@@ -1635,7 +1719,8 @@ async function handleSendMessage(text: string) {
                     content: fullResponse,
                     stats: responseStats,
                     model: currentModel,
-                    contextSize: currentContextSize
+                    contextSize: currentContextSize,
+                    thinking: finalThinking
                 });
                 postMessageToAllViews({
                     type: 'choiceRequest',
@@ -1660,7 +1745,8 @@ async function handleSendMessage(text: string) {
                     content: fullResponse,
                     stats: responseStats,
                     model: currentModel,
-                    contextSize: currentContextSize
+                    contextSize: currentContextSize,
+                    thinking: finalThinking
                 });
                 break;
             }
@@ -1671,7 +1757,8 @@ async function handleSendMessage(text: string) {
                 content: fullResponse,
                 stats: responseStats,
                 model: currentModel,
-                contextSize: currentContextSize
+                contextSize: currentContextSize,
+                thinking: finalThinking
             });
 
             // Execute all blocks and collect output
@@ -1838,7 +1925,7 @@ function handleChangeModel(model: string) {
         const providerType = config.get<string>('aiProvider', 'ollama');
         currentProvider = createAIProvider(providerType, model || undefined);
         // Persist model per provider
-        const configKey = providerType === 'lmstudio' ? 'lmstudioModel' : providerType === 'janai' ? 'janaiModel' : 'ollamaModel';
+        const configKey = providerType === 'lmstudio' ? 'lmstudioModel' : providerType === 'janai' ? 'janaiModel' : providerType === 'vscode-lm' ? 'vscodeLmModel' : 'ollamaModel';
         config.update(configKey, model, vscode.ConfigurationTarget.Global);
     } catch (err: any) {
         postMessageToAllViews({
@@ -1963,6 +2050,12 @@ function fetchJanAIModels(): Promise<string[]> {
     });
 }
 
+function fetchVSCodeLMModels(): Thenable<string[]> {
+    return vscode.lm.selectChatModels().then(models => {
+        return models.map(m => m.id || m.name || m.family).sort();
+    });
+}
+
 async function handleFetchModels(providerType?: string) {
     console.log('[Local Copilot] handleFetchModels called');
     const activeProvider = providerType || vscode.workspace.getConfiguration('local-copilot').get<string>('aiProvider', 'ollama');
@@ -1971,6 +2064,8 @@ async function handleFetchModels(providerType?: string) {
             ? await fetchLMStudioModels()
             : activeProvider === 'janai'
             ? await fetchJanAIModels()
+            : activeProvider === 'vscode-lm'
+            ? await fetchVSCodeLMModels()
             : await fetchOllamaModels();
         console.log('[Local Copilot] Sending model list to views:', models);
         postMessageToAllViews({
@@ -1994,7 +2089,7 @@ async function handleFetchModels(providerType?: string) {
 }
 
 function fetchModelContextSize(modelName: string, providerType?: string) {
-    if (!modelName || providerType === 'lmstudio' || providerType === 'janai') {
+    if (!modelName || providerType === 'lmstudio' || providerType === 'janai' || providerType === 'vscode-lm') {
         currentContextSize = 0;
         return;
     }
@@ -2049,6 +2144,37 @@ function runSelectedInTerminal() {
     const terminal = vscode.window.activeTerminal || vscode.window.createTerminal('Local Copilot');
     terminal.show();
     terminal.sendText(text, true);
+}
+
+async function handleReadClipboardImage() {
+    logToFile('[CLIPBOARD] handleReadClipboardImage called');
+    try {
+        const b64 = await new Promise<string>((resolve, reject) => {
+            logToFile('[CLIPBOARD] Executing PowerShell to read clipboard image...');
+            exec(
+                `powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "Add-Type -AssemblyName System.Windows.Forms; $img = [System.Windows.Forms.Clipboard]::GetImage(); if ($img -ne $null) { $ms = New-Object System.IO.MemoryStream; $img.Save($ms, [System.Drawing.Imaging.ImageFormat]::Png); $bytes = $ms.ToArray(); [Convert]::ToBase64String($bytes) } else { Write-Output '' }"`,
+                { timeout: 5000 },
+                (err: any, stdout: string, stderr: string) => {
+                    if (err) {
+                        logToFile('[CLIPBOARD] PowerShell exec error: ' + err.message);
+                        reject(err);
+                        return;
+                    }
+                    if (stderr) logToFile('[CLIPBOARD] PowerShell stderr: ' + stderr);
+                    logToFile('[CLIPBOARD] PowerShell stdout length: ' + stdout.trim().length);
+                    resolve(stdout.trim());
+                }
+            );
+        });
+        if (b64) {
+            logToFile('[CLIPBOARD] Got clipboard image base64, length: ' + b64.length);
+            postMessageToAllViews({ type: 'clipboardImage', base64: b64, mimeType: 'image/png' });
+        } else {
+            logToFile('[CLIPBOARD] PowerShell returned empty - no image on clipboard');
+        }
+    } catch (e: any) {
+        logToFile('[CLIPBOARD] handleReadClipboardImage failed: ' + e.message);
+    }
 }
 
 export function deactivate() {

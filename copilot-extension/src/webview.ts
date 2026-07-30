@@ -7,7 +7,7 @@ export function getWebviewContent(extensionUri: vscode.Uri, webview: vscode.Webv
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${webview.cspSource} 'unsafe-inline'; script-src ${webview.cspSource};">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src ${webview.cspSource} data:; style-src ${webview.cspSource} 'unsafe-inline'; script-src ${webview.cspSource};">
     <title>Local Copilot</title>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -402,6 +402,109 @@ export function getWebviewContent(extensionUri: vscode.Uri, webview: vscode.Webv
             opacity: 0.5;
             cursor: not-allowed;
         }
+        .thinking-block {
+            background: var(--vscode-textBlockQuote-background);
+            border: 1px solid var(--vscode-panel-border);
+            border-radius: 6px;
+            padding: 6px 10px;
+            margin-bottom: 10px;
+            font-size: 12px;
+        }
+        .thinking-block summary {
+            cursor: pointer;
+            font-size: 11px;
+            font-weight: 600;
+            color: var(--vscode-descriptionForeground);
+            user-select: none;
+            padding: 2px 0;
+        }
+        .thinking-block summary:hover {
+            color: var(--vscode-editor-foreground);
+        }
+        .thinking-block .thinking-content {
+            margin-top: 6px;
+            padding: 8px;
+            background: var(--vscode-terminal-background);
+            border-radius: 4px;
+            font-family: 'Cascadia Code', 'Fira Code', 'Consolas', monospace;
+            font-size: 11px;
+            line-height: 1.5;
+            white-space: pre-wrap;
+            max-height: 300px;
+            overflow-y: auto;
+            color: var(--vscode-terminal-foreground);
+            opacity: 0.85;
+        }
+        #thinking-toggle {
+            background: none;
+            border: 1px solid var(--vscode-panel-border);
+            color: var(--vscode-editor-foreground);
+            padding: 4px 10px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 11px;
+            white-space: nowrap;
+        }
+        #thinking-toggle:hover {
+            background: var(--vscode-button-hoverBackground);
+            color: var(--vscode-button-foreground);
+        }
+        #thinking-toggle.active {
+            border-color: var(--vscode-focusBorder);
+            background: var(--vscode-button-background);
+            color: var(--vscode-button-foreground);
+        }
+        .chat-image {
+            max-width: 100%;
+            max-height: 400px;
+            border-radius: 6px;
+            margin: 6px 0;
+            cursor: pointer;
+            border: 1px solid var(--vscode-panel-border);
+        }
+        .chat-image:hover {
+            opacity: 0.9;
+        }
+        #image-preview-container {
+            display: none;
+            flex-wrap: wrap;
+            gap: 6px;
+            padding: 6px 0;
+            border-bottom: 1px solid var(--vscode-panel-border);
+            margin-bottom: 6px;
+        }
+        .image-preview-wrapper {
+            position: relative;
+            display: inline-block;
+        }
+        .image-preview-thumb {
+            width: 60px;
+            height: 60px;
+            object-fit: cover;
+            border-radius: 4px;
+            border: 1px solid var(--vscode-panel-border);
+        }
+        .image-preview-remove {
+            position: absolute;
+            top: -6px;
+            right: -6px;
+            width: 18px;
+            height: 18px;
+            border-radius: 50%;
+            border: none;
+            background: var(--vscode-errorForeground);
+            color: white;
+            font-size: 12px;
+            line-height: 1;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 0;
+        }
+        .image-preview-remove:hover {
+            background: var(--vscode-inputValidation-errorBorder);
+        }
     </style>
 </head>
 <body>
@@ -414,6 +517,7 @@ export function getWebviewContent(extensionUri: vscode.Uri, webview: vscode.Webv
                 <option value="janai">JAN AI (Local)</option>
                 <option value="openai">OpenAI</option>
                 <option value="copilot-web">GitHub Copilot</option>
+                <option value="vscode-lm">VS Code LM API</option>
             </select>
             <select id="model-select" style="display:none;">
                 <option value="">Loading models...</option>
@@ -427,6 +531,7 @@ export function getWebviewContent(extensionUri: vscode.Uri, webview: vscode.Webv
             <button id="benchmark-btn" title="Run a predefined benchmark task against the current model">Benchmark</button>
             <input id="batch-tries" type="number" min="1" max="20" value="2" style="width:48px;padding:3px 4px;border-radius:4px;border:1px solid var(--vscode-panel-border);background:var(--vscode-input-background);color:var(--vscode-input-foreground);font-size:11px;text-align:center;" title="Number of tries per model">
             <button id="batch-benchmark-btn" title="Run benchmark against all discovered models">Batch</button>
+            <button id="thinking-toggle" class="active" title="Toggle model thinking/reasoning display">🧠 Thinking ON</button>
             <button id="clear-btn">Clear</button>
         </div>
     </div>
@@ -444,7 +549,7 @@ export function getWebviewContent(extensionUri: vscode.Uri, webview: vscode.Webv
             <h2>Welcome to Local Copilot</h2>
             <p>Your AI assistant with local command execution capabilities.</p>
             <div class="features">
-                <div class="feature"><span class="check">&#10003;</span> Chat with AI models (Ollama, LM Studio, JAN AI, OpenAI, Copilot)</div>
+                <div class="feature"><span class="check">&#10003;</span> Chat with AI models (Ollama, LM Studio, JAN AI, OpenAI, Copilot, VS Code LM)</div>
                 <div class="feature"><span class="check">&#10003;</span> Execute commands directly in VS Code terminal</div>
                 <div class="feature"><span class="check">&#10003;</span> Read and analyze files in your workspace</div>
                 <div class="feature"><span class="check">&#10003;</span> Install packages and run scripts</div>
@@ -453,6 +558,7 @@ export function getWebviewContent(extensionUri: vscode.Uri, webview: vscode.Webv
         </div>
     </div>
     <div id="input-container">
+        <div id="image-preview-container"></div>
         <div id="input-row">
             <textarea id="message-input" placeholder="Ask me anything... (Shift+Enter for new line)" rows="1"></textarea>
             <button id="send-btn">Send</button>

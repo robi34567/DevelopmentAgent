@@ -2,9 +2,15 @@ import * as vscode from 'vscode';
 import * as https from 'https';
 import * as http from 'http';
 
+export interface ChatMessageImage {
+    base64: string;
+    mimeType: string;
+}
+
 export interface ChatMessage {
     role: 'system' | 'user' | 'assistant';
     content: string;
+    images?: ChatMessageImage[];
 }
 
 export interface ResponseStats {
@@ -16,7 +22,7 @@ export interface ResponseStats {
 }
 
 export interface AIProvider {
-    sendMessage(messages: ChatMessage[], onChunk: (chunk: string) => void): Promise<{ content: string; stats?: ResponseStats }>;
+    sendMessage(messages: ChatMessage[], onChunk: (chunk: string) => void, onThinking?: (chunk: string) => void): Promise<{ content: string; stats?: ResponseStats; thinking?: string }>;
     abort(): void;
 }
 
@@ -70,9 +76,10 @@ function makeRequest(url: string, method: string, headers: any, body: string, si
     });
 }
 
-function readStream(stream: http.IncomingMessage, onData: (chunk: string) => void): Promise<{ content: string; stats?: ResponseStats }> {
+function readStream(stream: http.IncomingMessage, onData: (chunk: string) => void, onThinking?: (chunk: string) => void): Promise<{ content: string; stats?: ResponseStats; thinking?: string }> {
     return new Promise((resolve, reject) => {
         let fullContent = '';
+        let fullThinking = '';
         let buffer = '';
         let settled = false;
         let evalCount: number | undefined;
@@ -102,6 +109,10 @@ function readStream(stream: http.IncomingMessage, onData: (chunk: string) => voi
                         fullContent += parsed.message.content;
                         try { onData(parsed.message.content); } catch(e) {}
                     }
+                    if (parsed.message?.reasoning_content) {
+                        fullThinking += parsed.message.reasoning_content;
+                        if (onThinking) { try { onThinking(parsed.message.reasoning_content); } catch(e) {} }
+                    }
                     if (parsed.done) {
                         console.log('[Local Copilot] Stream done signal received');
                         if (parsed.eval_count !== undefined) evalCount = parsed.eval_count;
@@ -128,6 +139,10 @@ function readStream(stream: http.IncomingMessage, onData: (chunk: string) => voi
                         fullContent += parsed.message.content;
                         try { onData(parsed.message.content); } catch(e) {}
                     }
+                    if (parsed.message?.reasoning_content) {
+                        fullThinking += parsed.message.reasoning_content;
+                        if (onThinking) { try { onThinking(parsed.message.reasoning_content); } catch(e) {} }
+                    }
                     if (parsed.done) {
                         if (parsed.eval_count !== undefined) evalCount = parsed.eval_count;
                         if (parsed.eval_duration !== undefined) evalDurationNs = parsed.eval_duration;
@@ -139,7 +154,8 @@ function readStream(stream: http.IncomingMessage, onData: (chunk: string) => voi
             const stats: ResponseStats | undefined = (evalCount !== undefined && evalDurationNs !== undefined && evalDurationNs > 0)
                 ? { tokenCount: evalCount, durationMs: evalDurationNs / 1e6, tokensPerSec: Math.round(evalCount / (evalDurationNs / 1e9)), promptEvalCount }
                 : (promptEvalCount !== undefined ? { promptEvalCount } : undefined);
-            resolve({ content: fullContent, stats });
+            const thinking = fullThinking || undefined;
+            resolve({ content: fullContent, stats, thinking });
         });
 
         stream.on('error', (err: Error) => {
@@ -156,7 +172,8 @@ function readStream(stream: http.IncomingMessage, onData: (chunk: string) => voi
                     const stats: ResponseStats | undefined = (evalCount !== undefined && evalDurationNs !== undefined && evalDurationNs > 0)
                         ? { tokenCount: evalCount, durationMs: evalDurationNs / 1e6, tokensPerSec: Math.round(evalCount / (evalDurationNs / 1e9)), promptEvalCount }
                         : (promptEvalCount !== undefined ? { promptEvalCount } : undefined);
-                    resolve({ content: fullContent, stats });
+                    const thinking = fullThinking || undefined;
+                    resolve({ content: fullContent, stats, thinking });
                 } else {
                     reject(new Error('Stream closed without response'));
                 }
@@ -165,9 +182,10 @@ function readStream(stream: http.IncomingMessage, onData: (chunk: string) => voi
     });
 }
 
-function readSSEStream(stream: http.IncomingMessage, onData: (chunk: string) => void): Promise<{ content: string; stats?: ResponseStats }> {
+function readSSEStream(stream: http.IncomingMessage, onData: (chunk: string) => void, onThinking?: (chunk: string) => void): Promise<{ content: string; stats?: ResponseStats; thinking?: string }> {
     return new Promise((resolve, reject) => {
         let fullContent = '';
+        let fullThinking = '';
         let buffer = '';
         let settled = false;
         let promptTokens = 0;
@@ -202,10 +220,16 @@ function readSSEStream(stream: http.IncomingMessage, onData: (chunk: string) => 
                         completionTokens = parsed.usage.completion_tokens || 0;
                     }
 
-                    const content = parsed.choices?.[0]?.delta?.content || '';
+                    const delta = parsed.choices?.[0]?.delta;
+                    const content = delta?.content || '';
                     if (content) {
                         fullContent += content;
                         try { onData(content); } catch(e) {}
+                    }
+                    const reasoning = delta?.reasoning_content || '';
+                    if (reasoning) {
+                        fullThinking += reasoning;
+                        if (onThinking) { try { onThinking(reasoning); } catch(e) {} }
                     }
                 } catch (e) {
                     console.log('[Local Copilot] Failed to parse SSE line:', trimmed.substring(0, 50));
@@ -219,7 +243,8 @@ function readSSEStream(stream: http.IncomingMessage, onData: (chunk: string) => 
             const stats: ResponseStats | undefined = completionTokens > 0
                 ? { tokenCount: completionTokens }
                 : undefined;
-            resolve({ content: fullContent, stats });
+            const thinking = fullThinking || undefined;
+            resolve({ content: fullContent, stats, thinking });
         });
 
         stream.on('error', (err: Error) => {
@@ -236,7 +261,8 @@ function readSSEStream(stream: http.IncomingMessage, onData: (chunk: string) => 
                     const stats: ResponseStats | undefined = completionTokens > 0
                         ? { tokenCount: completionTokens }
                         : undefined;
-                    resolve({ content: fullContent, stats });
+                    const thinking = fullThinking || undefined;
+                    resolve({ content: fullContent, stats, thinking });
                 } else {
                     reject(new Error('Stream closed without response'));
                 }
@@ -257,15 +283,24 @@ export class OllamaProvider implements AIProvider {
         console.log('[Local Copilot] Created OllamaProvider with endpoint:', this.endpoint, 'model:', this.model);
     }
 
-    async sendMessage(messages: ChatMessage[], onChunk: (chunk: string) => void): Promise<{ content: string; stats?: ResponseStats }> {
+    async sendMessage(messages: ChatMessage[], onChunk: (chunk: string) => void, onThinking?: (chunk: string) => void): Promise<{ content: string; stats?: ResponseStats; thinking?: string }> {
         if (this.abortController) {
             this.abortController.abort();
         }
         this.abortController = new AbortController();
 
+        // Convert ChatMessageImage[] to base64 strings for Ollama API
+        const ollamaMessages = messages.map(msg => {
+            const m: any = { role: msg.role, content: msg.content };
+            if (msg.images && msg.images.length > 0) {
+                m.images = msg.images.map(i => i.base64);
+            }
+            return m;
+        });
+
         const body = JSON.stringify({
             model: this.model,
-            messages: messages,
+            messages: ollamaMessages,
             stream: true
         });
 
@@ -301,9 +336,9 @@ export class OllamaProvider implements AIProvider {
             throw new Error(`Ollama API error ${response.status}: ${errorBody.substring(0, 200)}`);
         }
 
-        const result = await readStream(response.body, onChunk);
-        console.log('[Local Copilot] Stream completed, total chars:', result.content.length, 'stats:', result.stats);
-        return { content: result.content, stats: result.stats };
+        const result = await readStream(response.body, onChunk, onThinking);
+        console.log('[Local Copilot] Stream completed, total chars:', result.content.length, 'stats:', result.stats, 'thinking:', result.thinking ? result.thinking.length + ' chars' : 'none');
+        return { content: result.content, stats: result.stats, thinking: result.thinking };
     }
 
     abort(): void {
@@ -326,7 +361,7 @@ export class OpenAIProvider implements AIProvider {
         this.endpoint = config.get<string>('openaiEndpoint', 'https://api.openai.com/v1');
     }
 
-    async sendMessage(messages: ChatMessage[], onChunk: (chunk: string) => void): Promise<{ content: string; stats?: ResponseStats }> {
+    async sendMessage(messages: ChatMessage[], onChunk: (chunk: string) => void, onThinking?: (chunk: string) => void): Promise<{ content: string; stats?: ResponseStats; thinking?: string }> {
         if (this.abortController) {
             this.abortController.abort();
         }
@@ -365,11 +400,11 @@ export class OpenAIProvider implements AIProvider {
         }
 
         const startTimeOai = Date.now();
-        const result3 = await readSSEStream(response.body, onChunk);
+        const result3 = await readSSEStream(response.body, onChunk, onThinking);
         const durationMsOai = Date.now() - startTimeOai;
         const statsOai = result3.stats || {};
         if (!statsOai.durationMs) statsOai.durationMs = durationMsOai;
-        return { content: result3.content, stats: statsOai };
+        return { content: result3.content, stats: statsOai, thinking: result3.thinking };
     }
 
     abort(): void {
@@ -381,7 +416,7 @@ export class OpenAIProvider implements AIProvider {
 export class CopilotWebProvider implements AIProvider {
     private abortController: AbortController | null = null;
 
-    async sendMessage(messages: ChatMessage[], onChunk: (chunk: string) => void): Promise<{ content: string; stats?: ResponseStats }> {
+    async sendMessage(messages: ChatMessage[], onChunk: (chunk: string) => void, onThinking?: (chunk: string) => void): Promise<{ content: string; stats?: ResponseStats; thinking?: string }> {
         if (this.abortController) {
             this.abortController.abort();
         }
@@ -430,7 +465,7 @@ export class JanAIProvider implements AIProvider {
         console.log('[Local Copilot] Created JanAIProvider with endpoint:', this.endpoint, 'model:', this.model);
     }
 
-    async sendMessage(messages: ChatMessage[], onChunk: (chunk: string) => void): Promise<{ content: string; stats?: ResponseStats }> {
+    async sendMessage(messages: ChatMessage[], onChunk: (chunk: string) => void, onThinking?: (chunk: string) => void): Promise<{ content: string; stats?: ResponseStats; thinking?: string }> {
         if (this.abortController) {
             this.abortController.abort();
         }
@@ -477,17 +512,146 @@ export class JanAIProvider implements AIProvider {
         }
 
         const startTime = Date.now();
-        const result = await readSSEStream(response.body, onChunk);
+        const result = await readSSEStream(response.body, onChunk, onThinking);
         const durationMs = Date.now() - startTime;
         const stats = result.stats || {};
         if (!stats.durationMs) stats.durationMs = durationMs;
-        return { content: result.content, stats };
+        return { content: result.content, stats, thinking: result.thinking };
     }
 
     abort(): void {
         this.abortController?.abort();
         this.abortController = null;
     }
+}
+
+export class VSCodeLMProvider implements AIProvider {
+    private abortController: AbortController | null = null;
+    private model: string;
+
+    constructor(modelOverride?: string) {
+        this.model = modelOverride || '';
+    }
+
+    private buildLMmsg(messages: ChatMessage[], stripImages: boolean): vscode.LanguageModelChatMessage[] {
+        const lmMessages: vscode.LanguageModelChatMessage[] = [];
+        for (const msg of messages) {
+            if (!stripImages && msg.images && msg.images.length > 0) {
+                const parts: (vscode.LanguageModelTextPart | vscode.LanguageModelDataPart)[] = [];
+                if (msg.content) {
+                    parts.push(new vscode.LanguageModelTextPart(msg.content));
+                }
+                for (const img of msg.images) {
+                    parts.push(vscode.LanguageModelDataPart.image(Buffer.from(img.base64, 'base64'), img.mimeType));
+                }
+                lmMessages.push(vscode.LanguageModelChatMessage.User(parts));
+            } else if (msg.role === 'assistant') {
+                lmMessages.push(vscode.LanguageModelChatMessage.Assistant(msg.content));
+            } else {
+                lmMessages.push(vscode.LanguageModelChatMessage.User(msg.content));
+            }
+        }
+        return lmMessages;
+    }
+
+    private async doStream(model: vscode.LanguageModelChat, lmMessages: vscode.LanguageModelChatMessage[], onChunk: (chunk: string) => void, skipOutput: boolean = false): Promise<string> {
+        const tokenSource = new vscode.CancellationTokenSource();
+        this.abortController?.signal.addEventListener('abort', () => tokenSource.cancel(), { once: true });
+
+        let fullContent = '';
+        const response = await model.sendRequest(lmMessages, {}, tokenSource.token);
+        for await (const part of response.stream) {
+            if (part instanceof vscode.LanguageModelTextPart) {
+                fullContent += part.value;
+                if (!skipOutput) { try { onChunk(part.value); } catch (e) {} }
+            } else if (part instanceof vscode.LanguageModelDataPart) {
+                const dataUrl = dataPartToDataUrl(part);
+                if (dataUrl) {
+                    const imgMd = `![image](${dataUrl})`;
+                    fullContent += imgMd;
+                    if (!skipOutput) { try { onChunk(imgMd); } catch (e) {} }
+                }
+            } else if (part instanceof vscode.LanguageModelToolCallPart) {
+                const toolText = `\`[Tool: ${part.name}(${JSON.stringify(part.input)})]\``;
+                fullContent += toolText;
+                if (!skipOutput) { try { onChunk(toolText); } catch (e) {} }
+            }
+        }
+        return fullContent;
+    }
+
+    private isImageError(content: string): boolean {
+        const lower = content.toLowerCase();
+        return lower.includes('cannot read') && lower.includes('image') && lower.includes('does not support');
+    }
+
+    async sendMessage(messages: ChatMessage[], onChunk: (chunk: string) => void, onThinking?: (chunk: string) => void): Promise<{ content: string; stats?: ResponseStats; thinking?: string }> {
+        if (this.abortController) {
+            this.abortController.abort();
+        }
+        this.abortController = new AbortController();
+
+        const models = await vscode.lm.selectChatModels();
+        console.log('[Local Copilot] VSCodeLM available models:', models.map(m => ({ id: m.id, name: m.name, family: m.family, vendor: m.vendor })));
+        if (models.length === 0) {
+            throw new Error('No language models available via VS Code LM API. Install a model provider extension (e.g., GitHub Copilot) and sign in.');
+        }
+
+        let selectedModel = models[0];
+        if (this.model) {
+            const found = models.find(m => m.id === this.model || m.name === this.model || m.family === this.model);
+            if (found) selectedModel = found;
+        }
+        console.log('[Local Copilot] VSCodeLM selected model:', selectedModel.id, selectedModel.name, selectedModel.family, selectedModel.vendor);
+
+        const hasImages = messages.some(m => m.images && m.images.length > 0);
+
+        // Try with images first (buffered — don't stream yet so we can detect image errors)
+        if (hasImages) {
+            const lmWithImages = this.buildLMmsg(messages, false);
+            try {
+                const content = await this.doStream(selectedModel, lmWithImages, onChunk, true);
+                if (this.isImageError(content)) {
+                    // Model responded with image error — fall through to retry
+                } else {
+                    // Good response — now stream it to the user
+                    try { onChunk(content); } catch (e) {}
+                    return { content };
+                }
+            } catch (err: any) {
+                if (!err.message?.toLowerCase().includes('image')) throw err;
+                // API rejected images — fall through to retry
+            }
+        }
+
+        // Retry without images
+        const lmTextOnly = this.buildLMmsg(messages, true);
+        try {
+            const content = await this.doStream(selectedModel, lmTextOnly, onChunk);
+            const prefix = hasImages ? '⚠️ The model does not support image input. Only text was sent.\n\n' : '';
+            return { content: prefix + content };
+        } catch (err: any) {
+            if (err.message?.includes('cancel')) throw err;
+            throw new Error(`VS Code LM API error: ${err.message}`);
+        }
+    }
+
+    abort(): void {
+        this.abortController?.abort();
+        this.abortController = null;
+    }
+}
+
+function dataPartToDataUrl(part: vscode.LanguageModelDataPart): string | undefined {
+    if (part.mimeType.startsWith('image/')) {
+        const base64 = Buffer.from(part.data).toString('base64');
+        return `data:${part.mimeType};base64,${base64}`;
+    }
+    if (part.mimeType === 'text/plain' || part.mimeType === 'text/markdown') {
+        const text = Buffer.from(part.data).toString('utf-8');
+        return `data:${part.mimeType};charset=utf-8,${encodeURIComponent(text)}`;
+    }
+    return undefined;
 }
 
 export function createAIProvider(type: string, modelOverride?: string): AIProvider {
@@ -503,6 +667,8 @@ export function createAIProvider(type: string, modelOverride?: string): AIProvid
             return new OpenAIProvider();
         case 'copilot-web':
             return new CopilotWebProvider();
+        case 'vscode-lm':
+            return new VSCodeLMProvider(modelOverride);
         default:
             return new OllamaProvider(modelOverride);
     }
@@ -520,7 +686,7 @@ export class LMStudioProvider implements AIProvider {
         console.log('[Local Copilot] Created LMStudioProvider with endpoint:', this.endpoint, 'model:', this.model);
     }
 
-    async sendMessage(messages: ChatMessage[], onChunk: (chunk: string) => void): Promise<{ content: string; stats?: ResponseStats }> {
+    async sendMessage(messages: ChatMessage[], onChunk: (chunk: string) => void, onThinking?: (chunk: string) => void): Promise<{ content: string; stats?: ResponseStats; thinking?: string }> {
         if (this.abortController) {
             this.abortController.abort();
         }
@@ -567,11 +733,11 @@ export class LMStudioProvider implements AIProvider {
         }
 
         const startTimeLm = Date.now();
-        const result = await readSSEStream(response.body, onChunk);
+        const result = await readSSEStream(response.body, onChunk, onThinking);
         const durationMsLm = Date.now() - startTimeLm;
         const stats = result.stats || {};
         if (!stats.durationMs) stats.durationMs = durationMsLm;
-        return { content: result.content, stats };
+        return { content: result.content, stats, thinking: result.thinking };
     }
 
     abort(): void {

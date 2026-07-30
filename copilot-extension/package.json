@@ -47,6 +47,10 @@
       {
         "command": "local-copilot.configureOllamaNetwork",
         "title": "Local Copilot: Configure Ollama for Network Access (bind 0.0.0.0)"
+      },
+      {
+        "command": "local-copilot.toggleThinking",
+        "title": "Local Copilot: Toggle Thinking Display"
       }
     ],
     "configuration": {
@@ -60,7 +64,8 @@
             "lmstudio",
             "openai",
             "copilot-web",
-            "janai"
+            "janai",
+            "vscode-lm"
           ],
           "description": "AI provider to use for chat responses"
         },
@@ -114,6 +119,11 @@
           "type": "string",
           "default": "",
           "description": "JAN AI model name (leave empty to use the loaded model)"
+        },
+        "local-copilot.vscodeLmModel": {
+          "type": "string",
+          "default": "",
+          "description": "VS Code LM API model ID (leave empty to auto-select)"
         },
         "local-copilot.systemPrompt": {
           "type": "string",
