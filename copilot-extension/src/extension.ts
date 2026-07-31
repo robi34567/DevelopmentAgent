@@ -5,6 +5,7 @@ import * as path from 'path';
 import { exec } from 'child_process';
 import { AIProvider, ChatMessage, ResponseStats, createAIProvider } from './aiProvider';
 import { getWebviewContent } from './webview';
+import { AppConfig, getActiveProvider, getApprovalMode as getConfigApprovalMode, getProviderConfig, getProviderType, getSystemPrompt, loadConfig, saveConfig, getConfigPath } from './config';
 
 const MAX_TOOL_ROUNDS = 10;
 const COMPRESSION_THRESHOLD_CHARS = 30000;
@@ -190,7 +191,7 @@ function handleNewSession() {
         chatHistory: [],
         chatHtml: '',
         model: currentModel,
-        provider: vscode.workspace.getConfiguration('local-copilot').get<string>('aiProvider', 'ollama'),
+        provider: getActiveProvider(),
         approvalMode: approvalMode,
         compressedHistories: [],
         memories: []
@@ -218,7 +219,7 @@ function handleSaveSession(name?: string) {
         chatHistory: [...chatHistory],
         chatHtml: '',
         model: currentModel,
-        provider: vscode.workspace.getConfiguration('local-copilot').get<string>('aiProvider', 'ollama'),
+        provider: getActiveProvider(),
         approvalMode: approvalMode,
         compressedHistories: [...compressedHistories],
         memories: [...sessionMemories]
@@ -306,7 +307,7 @@ function handleDeleteSession(id: string) {
             chatHistory: [],
             chatHtml: '',
             model: currentModel,
-            provider: vscode.workspace.getConfiguration('local-copilot').get<string>('aiProvider', 'ollama'),
+            provider: getActiveProvider(),
             approvalMode,
             compressedHistories: [],
             memories: []
@@ -402,12 +403,18 @@ async function shouldExecuteCommand(command: string): Promise<boolean> {
 }
 
 function getApprovalMode(): string {
-    return workspaceState?.get<string>('approvalMode', 'safe') || 'safe';
+    const cfg = getConfigApprovalMode();
+    return workspaceState?.get<string>('approvalMode', cfg) || cfg;
 }
 
 function saveApprovalMode(mode: string) {
     approvalMode = mode;
     workspaceState?.update('approvalMode', mode);
+    try {
+        const cfg = loadConfig();
+        cfg.approvalMode = mode;
+        saveConfig(cfg);
+    } catch {}
 }
 
 function ensureLogDir(): string {
@@ -522,7 +529,7 @@ class SidebarProvider implements vscode.WebviewViewProvider {
 
         // Push current provider and models to the webview after it loads
         const config = vscode.workspace.getConfiguration('local-copilot');
-        const currentProviderType = config.get<string>('aiProvider', 'ollama');
+        const currentProviderType = getActiveProvider();
         webviewView.webview.postMessage({ type: 'setProvider', provider: currentProviderType });
         if (currentProviderType === 'ollama' || currentProviderType === 'lmstudio' || currentProviderType === 'janai' || currentProviderType === 'vscode-lm') {
             handleFetchModels(currentProviderType);
@@ -568,6 +575,12 @@ class SidebarProvider implements vscode.WebviewViewProvider {
                                 break;
                             case 'getApproval':
                                 webviewView.webview.postMessage({ type: 'setApproval', mode: getApprovalMode() });
+                                break;
+                            case 'getConfig':
+                                webviewView.webview.postMessage({ type: 'configLoaded', config: loadConfig(), configPath: getConfigPath() });
+                                break;
+                            case 'saveConfig':
+                                handleSaveConfig(message.config);
                                 break;
                             case 'approvalResponse':
                                 handleApprovalResponse(message.id, message.approved);
@@ -688,7 +701,7 @@ export function activate(context: vscode.ExtensionContext) {
 
     // Register the command to configure Ollama for network access
     const configureOllamaCommand = vscode.commands.registerCommand('local-copilot.configureOllamaNetwork', async () => {
-        const host = vscode.workspace.getConfiguration('local-copilot').get<string>('ollamaHost', '0.0.0.0');
+        const host = getProviderConfig('ollama').host || '0.0.0.0';
         const choice = await vscode.window.showInformationMessage(
             `Set Ollama to bind on ${host} (all network interfaces) and restart?`,
             { modal: true },
@@ -732,6 +745,18 @@ export function activate(context: vscode.ExtensionContext) {
     });
     context.subscriptions.push(toggleThinkingCommand);
 
+    // Register command to open the config file
+    const openConfigCommand = vscode.commands.registerCommand('local-copilot.openConfigFile', async () => {
+        try {
+            const configPath = getConfigPath();
+            const doc = await vscode.workspace.openTextDocument(configPath);
+            await vscode.window.showTextDocument(doc);
+        } catch (e: any) {
+            vscode.window.showErrorMessage(`Failed to open config file: ${e.message}`);
+        }
+    });
+    context.subscriptions.push(openConfigCommand);
+
     // Register a status bar item
     const statusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);
     statusBarItem.text = "$(comment-discussion) Local Copilot";
@@ -765,7 +790,7 @@ function createOrShowChatPanel(context: vscode.ExtensionContext) {
     // Push current provider and models to the webview after it loads
     {
         const cfg = vscode.workspace.getConfiguration('local-copilot');
-        const provType = cfg.get<string>('aiProvider', 'ollama');
+        const provType = getActiveProvider();
         currentPanel.webview.postMessage({ type: 'setProvider', provider: provType });
         if (provType === 'ollama' || provType === 'lmstudio' || provType === 'janai' || provType === 'vscode-lm') {
             handleFetchModels(provType);
@@ -811,6 +836,12 @@ function createOrShowChatPanel(context: vscode.ExtensionContext) {
                         break;
                     case 'getApproval':
                         currentPanel?.webview.postMessage({ type: 'setApproval', mode: getApprovalMode() });
+                        break;
+                    case 'getConfig':
+                        currentPanel?.webview.postMessage({ type: 'configLoaded', config: loadConfig(), configPath: getConfigPath() });
+                        break;
+                    case 'saveConfig':
+                        handleSaveConfig(message.config);
                         break;
                     case 'approvalResponse':
                         handleApprovalResponse(message.id, message.approved);
@@ -888,9 +919,9 @@ function createOrShowChatPanel(context: vscode.ExtensionContext) {
 
 function ensureProvider(): AIProvider {
     if (!currentProvider) {
-        const config = vscode.workspace.getConfiguration('local-copilot');
-        const provType = config.get<string>('aiProvider', 'ollama');
-        currentModel = provType === 'lmstudio' ? config.get<string>('lmstudioModel', '') : provType === 'janai' ? config.get<string>('janaiModel', '') : provType === 'vscode-lm' ? config.get<string>('vscodeLmModel', '') : config.get<string>('ollamaModel', 'qwen2.5-coder:3b');
+        const provType = getActiveProvider();
+        const cfg = getProviderConfig(provType);
+        currentModel = cfg.model || '';
         currentProvider = createAIProvider(provType, currentModel || undefined);
     }
     return currentProvider;
@@ -1222,7 +1253,7 @@ async function handleBenchmark(): Promise<void> {
     }
 
     const config = vscode.workspace.getConfiguration('local-copilot');
-    const systemPrompt = config.get<string>('systemPrompt', '');
+    const systemPrompt = getSystemPrompt();
 
     // Read benchmark task file (extension root is one level above out/)
     const extPath = path.resolve(__dirname, '..');
@@ -1302,7 +1333,7 @@ async function handleBenchmark(): Promise<void> {
         timestamp: new Date().toISOString(),
         task: task,
         model: currentModel,
-        provider: config.get<string>('aiProvider', 'ollama'),
+        provider: getActiveProvider(),
         contextSize: currentContextSize,
         stats: responseStats,
         prompt: benchmarkPrompt,
@@ -1336,9 +1367,9 @@ async function discoverBenchmarkEntries(): Promise<BenchmarkEntry[]> {
     const entries: BenchmarkEntry[] = [];
 
     const discoverResults = await Promise.allSettled([
-        (async () => { const m = await fetchOllamaModels(); return m.map(model => ({ provider: 'ollama', model })); })(),
-        (async () => { const m = await fetchLMStudioModels(); return m.map(model => ({ provider: 'lmstudio', model })); })(),
-        (async () => { const m = await fetchJanAIModels(); return m.filter(model => /jan/i.test(model)).map(model => ({ provider: 'janai', model })); })(),
+        (async () => { const m = await fetchOllamaModels('ollama'); return m.map(model => ({ provider: 'ollama', model })); })(),
+        (async () => { const m = await fetchOpenAICompatibleModels('lmstudio'); return m.map(model => ({ provider: 'lmstudio', model })); })(),
+        (async () => { const m = await fetchOpenAICompatibleModels('janai'); return m.filter(model => /jan/i.test(model)).map(model => ({ provider: 'janai', model })); })(),
         (async () => { const m = await fetchVSCodeLMModels(); return m.map(model => ({ provider: 'vscode-lm', model })); })(),
     ]);
 
@@ -1397,7 +1428,7 @@ async function handleBatchBenchmark(tries: number): Promise<void> {
     }
 
     const config = vscode.workspace.getConfiguration('local-copilot');
-    const systemPrompt = config.get<string>('systemPrompt', '');
+    const systemPrompt = getSystemPrompt();
     const benchmarkDir = path.join(extPath, 'benchmark');
     if (!fs.existsSync(benchmarkDir)) {
         fs.mkdirSync(benchmarkDir, { recursive: true });
@@ -1551,7 +1582,7 @@ async function handleMemorize(text: string, isGlobal: boolean): Promise<void> {
     }
 
     const config = vscode.workspace.getConfiguration('local-copilot');
-    const systemPrompt = config.get<string>('systemPrompt', '');
+    const systemPrompt = getSystemPrompt();
 
     const messages: ChatMessage[] = [];
     if (systemPrompt) {
@@ -1633,11 +1664,11 @@ async function handleSendMessage(text: string, images?: { base64: string; mimeTy
     }
 
     const config = vscode.workspace.getConfiguration('local-copilot');
-    const systemPrompt = config.get<string>('systemPrompt', '');
+    const systemPrompt = getSystemPrompt();
 
     // Add user message to history
     const userMsg: ChatMessage = { role: 'user', content: text };
-    const curProvider = config.get<string>('aiProvider', 'ollama');
+    const curProvider = getActiveProvider();
     logToFile(`[SEND] curProvider=${curProvider} images=${images?.length || 0}`);
     if (images && images.length > 0) {
         userMsg.images = images;
@@ -1909,27 +1940,45 @@ function handleChangeProvider(provider: string) {
     }
     chatHistory = [];
 
-    // Update the setting
-    const config = vscode.workspace.getConfiguration('local-copilot');
-    config.update('aiProvider', provider, vscode.ConfigurationTarget.Global);
+    // Update config file + VS Code setting
+    try {
+        const cfg = loadConfig();
+        cfg.aiProvider = provider;
+        saveConfig(cfg);
+    } catch (e: any) {
+        console.error('[Local Copilot] Failed to save provider to config:', e.message);
+    }
+    vscode.workspace.getConfiguration('local-copilot').update('aiProvider', provider, vscode.ConfigurationTarget.Global);
 
     postMessageToAllViews({
         type: 'addMessage',
         role: 'system',
         content: `Switched to ${provider} provider. Chat history cleared.`
     });
+    postMessageToAllViews({ type: 'configSaved', config: loadConfig(), configPath: getConfigPath() });
 }
 
 function handleChangeModel(model: string) {
     currentModel = model;
     fetchModelContextSize(model);
     try {
-        const config = vscode.workspace.getConfiguration('local-copilot');
-        const providerType = config.get<string>('aiProvider', 'ollama');
+        const providerType = getActiveProvider();
         currentProvider = createAIProvider(providerType, model || undefined);
-        // Persist model per provider
-        const configKey = providerType === 'lmstudio' ? 'lmstudioModel' : providerType === 'janai' ? 'janaiModel' : providerType === 'vscode-lm' ? 'vscodeLmModel' : 'ollamaModel';
-        config.update(configKey, model, vscode.ConfigurationTarget.Global);
+        // Persist model in config file + VS Code setting
+        try {
+            const cfg = loadConfig();
+            const prov = (cfg.providers as any)[providerType] || {};
+            prov.model = model;
+            (cfg.providers as any)[providerType] = prov;
+            saveConfig(cfg);
+        } catch (e: any) {
+            console.error('[Local Copilot] Failed to save model to config:', e.message);
+        }
+        const builtinProviders = ['ollama', 'lmstudio', 'janai', 'openai', 'copilot-web', 'vscode-lm'];
+        if (builtinProviders.includes(providerType)) {
+            const configKey = providerType === 'lmstudio' ? 'lmstudioModel' : providerType === 'janai' ? 'janaiModel' : providerType === 'vscode-lm' ? 'vscodeLmModel' : 'ollamaModel';
+            vscode.workspace.getConfiguration('local-copilot').update(configKey, model, vscode.ConfigurationTarget.Global);
+        }
     } catch (err: any) {
         postMessageToAllViews({
             type: 'error',
@@ -1945,10 +1994,46 @@ function handleChangeModel(model: string) {
     });
 }
 
-function fetchOllamaModels(): Promise<string[]> {
+function handleSaveConfig(config: any) {
+    try {
+        // Validate: every provider needs a type; label falls back to id; active provider must exist
+        const providers = config.providers || {};
+        const ids = Object.keys(providers);
+        if (ids.length === 0) {
+            throw new Error('At least one provider is required.');
+        }
+        for (const id of ids) {
+            const p = providers[id];
+            if (!p.type) p.type = getProviderType(id);
+            if (!p.label) p.label = id;
+        }
+        if (!config.aiProvider || !providers[config.aiProvider]) {
+            config.aiProvider = ids[0];
+        }
+        const saved = saveConfig(config);
+        // Re-apply active provider/model from the new config
+        const provType = getActiveProvider();
+        const provCfg = getProviderConfig(provType);
+        currentModel = provCfg.model || '';
+        try {
+            currentProvider = createAIProvider(provType, currentModel || undefined);
+        } catch (e: any) {
+            console.error('[Local Copilot] Failed to re-create provider after config save:', e.message);
+        }
+        postMessageToAllViews({ type: 'configSaved', config: saved, configPath: getConfigPath() });
+        logToFile(`[CONFIG] Config saved to ${getConfigPath()}`);
+    } catch (err: any) {
+        postMessageToAllViews({
+            type: 'error',
+            text: err.message || 'Failed to save config.'
+        });
+    }
+}
+
+function fetchOllamaModels(providerId: string = 'ollama'): Promise<string[]> {
     return new Promise((resolve, reject) => {
-        const config = vscode.workspace.getConfiguration('local-copilot');
-        const endpoint = config.get<string>('ollamaEndpoint', 'http://127.0.0.1:11434');
+        const cfg = getProviderConfig(providerId);
+        const endpoint = cfg.endpoint || 'http://127.0.0.1:11434';
         const url = `${endpoint}/api/tags`;
         console.log('[Local Copilot] Fetching models from:', url);
 
@@ -1981,74 +2066,38 @@ function fetchOllamaModels(): Promise<string[]> {
     });
 }
 
-function fetchLMStudioModels(): Promise<string[]> {
+function fetchOpenAICompatibleModels(providerId: string): Promise<string[]> {
     return new Promise((resolve, reject) => {
-        const config = vscode.workspace.getConfiguration('local-copilot');
-        const endpoint = config.get<string>('lmstudioEndpoint', 'http://127.0.0.1:1234/v1');
+        const cfg = getProviderConfig(providerId);
+        const endpoint = cfg.endpoint || 'http://127.0.0.1:1234/v1';
         const url = `${endpoint}/models`;
-        console.log('[Local Copilot] Fetching LM Studio models from:', url);
+        console.log('[Local Copilot] Fetching OpenAI-compatible models from:', url);
 
         const req = http.get(url, (res) => {
             let data = '';
             res.on('data', (chunk: Buffer) => { data += chunk.toString(); });
             res.on('end', () => {
-                console.log('[Local Copilot] LM Studio models status:', res.statusCode, 'body:', data.substring(0, 300));
+                console.log('[Local Copilot] Models status:', res.statusCode, 'body:', data.substring(0, 300));
                 if (res.statusCode && res.statusCode >= 400) {
-                    reject(new Error(`LM Studio returned ${res.statusCode}: ${data.substring(0, 200)}`));
+                    reject(new Error(`Provider returned ${res.statusCode}: ${data.substring(0, 200)}`));
                     return;
                 }
                 try {
                     const parsed = JSON.parse(data);
                     const models = (parsed.data || []).map((m: any) => m.id).sort();
-                    console.log('[Local Copilot] LM Studio found models:', models);
+                    console.log('[Local Copilot] Found models:', models);
                     resolve(models);
                 } catch (e) {
-                    reject(new Error('Failed to parse LM Studio response'));
+                    reject(new Error('Failed to parse model list response'));
                 }
             });
         });
         req.setTimeout(10000, () => {
             req.destroy(new Error('Request timed out'));
-            reject(new Error(`Cannot connect to LM Studio at ${endpoint}: timed out`));
+            reject(new Error(`Cannot connect to provider at ${endpoint}: timed out`));
         });
         req.on('error', (err) => {
-            reject(new Error(`Cannot connect to LM Studio at ${endpoint}: ${err.message}`));
-        });
-    });
-}
-
-function fetchJanAIModels(): Promise<string[]> {
-    return new Promise((resolve, reject) => {
-        const config = vscode.workspace.getConfiguration('local-copilot');
-        const endpoint = config.get<string>('janaiEndpoint', 'http://127.0.0.1:1337/v1');
-        const url = `${endpoint}/models`;
-        console.log('[Local Copilot] Fetching JAN AI models from:', url);
-
-        const req = http.get(url, (res) => {
-            let data = '';
-            res.on('data', (chunk: Buffer) => { data += chunk.toString(); });
-            res.on('end', () => {
-                console.log('[Local Copilot] JAN AI models status:', res.statusCode, 'body:', data.substring(0, 300));
-                if (res.statusCode && res.statusCode >= 400) {
-                    reject(new Error(`JAN AI returned ${res.statusCode}: ${data.substring(0, 200)}`));
-                    return;
-                }
-                try {
-                    const parsed = JSON.parse(data);
-                    const models = (parsed.data || []).map((m: any) => m.id).sort();
-                    console.log('[Local Copilot] JAN AI found models:', models);
-                    resolve(models);
-                } catch (e) {
-                    reject(new Error('Failed to parse JAN AI response'));
-                }
-            });
-        });
-        req.setTimeout(10000, () => {
-            req.destroy(new Error('Request timed out'));
-            reject(new Error(`Cannot connect to JAN AI at ${endpoint}: timed out`));
-        });
-        req.on('error', (err) => {
-            reject(new Error(`Cannot connect to JAN AI at ${endpoint}: ${err.message}`));
+            reject(new Error(`Cannot connect to provider at ${endpoint}: ${err.message}`));
         });
     });
 }
@@ -2061,15 +2110,17 @@ function fetchVSCodeLMModels(): Thenable<string[]> {
 
 async function handleFetchModels(providerType?: string) {
     console.log('[Local Copilot] handleFetchModels called');
-    const activeProvider = providerType || vscode.workspace.getConfiguration('local-copilot').get<string>('aiProvider', 'ollama');
+    const activeProvider = providerType || getActiveProvider();
     try {
-        const models = activeProvider === 'lmstudio'
-            ? await fetchLMStudioModels()
-            : activeProvider === 'janai'
-            ? await fetchJanAIModels()
-            : activeProvider === 'vscode-lm'
-            ? await fetchVSCodeLMModels()
-            : await fetchOllamaModels();
+        const connType = getProviderType(activeProvider);
+        let models: string[] = [];
+        if (connType === 'ollama') {
+            models = await fetchOllamaModels(activeProvider);
+        } else if (connType === 'openai') {
+            models = await fetchOpenAICompatibleModels(activeProvider);
+        } else if (connType === 'vscode-lm') {
+            models = await fetchVSCodeLMModels();
+        }
         console.log('[Local Copilot] Sending model list to views:', models);
         postMessageToAllViews({
             type: 'modelList',
@@ -2092,12 +2143,13 @@ async function handleFetchModels(providerType?: string) {
 }
 
 function fetchModelContextSize(modelName: string, providerType?: string) {
-    if (!modelName || providerType === 'lmstudio' || providerType === 'janai' || providerType === 'vscode-lm') {
+    const provType = providerType || getActiveProvider();
+    if (!modelName || getProviderType(provType) !== 'ollama') {
         currentContextSize = 0;
         return;
     }
-    const config = vscode.workspace.getConfiguration('local-copilot');
-    const endpoint = config.get<string>('ollamaEndpoint', 'http://127.0.0.1:11434');
+    const cfg = getProviderConfig(provType);
+    const endpoint = cfg.endpoint || 'http://127.0.0.1:11434';
     const url = `${endpoint}/api/show`;
     console.log('[Local Copilot] Fetching context size for:', modelName);
 

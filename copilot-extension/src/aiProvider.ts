@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 import * as https from 'https';
 import * as http from 'http';
+import { getProviderConfig, getProviderType } from './config';
 
 export interface ChatMessageImage {
     base64: string;
@@ -276,10 +277,10 @@ export class OllamaProvider implements AIProvider {
     private endpoint: string;
     private model: string;
 
-    constructor(modelOverride?: string) {
-        const config = vscode.workspace.getConfiguration('local-copilot');
-        this.endpoint = config.get<string>('ollamaEndpoint', 'http://127.0.0.1:11434');
-        this.model = modelOverride || config.get<string>('ollamaModel', 'qwen2.5-coder:3b');
+    constructor(providerId: string = 'ollama', modelOverride?: string) {
+        const cfg = getProviderConfig(providerId);
+        this.endpoint = cfg.endpoint || 'http://127.0.0.1:11434';
+        this.model = modelOverride || cfg.model || 'qwen2.5-coder:3b';
         console.log('[Local Copilot] Created OllamaProvider with endpoint:', this.endpoint, 'model:', this.model);
     }
 
@@ -434,12 +435,14 @@ export class OpenAIProvider implements AIProvider {
     private apiKey: string;
     private model: string;
     private endpoint: string;
+    private providerId: string;
 
-    constructor() {
-        const config = vscode.workspace.getConfiguration('local-copilot');
-        this.apiKey = config.get<string>('openaiApiKey', '');
-        this.model = config.get<string>('openaiModel', 'gpt-4o');
-        this.endpoint = config.get<string>('openaiEndpoint', 'https://api.openai.com/v1');
+    constructor(providerId: string = 'openai') {
+        const cfg = getProviderConfig(providerId);
+        this.providerId = providerId;
+        this.apiKey = cfg.apiKey || '';
+        this.model = cfg.model || 'gpt-4o';
+        this.endpoint = cfg.endpoint || 'https://api.openai.com/v1';
     }
 
     async sendMessage(messages: ChatMessage[], onChunk: (chunk: string) => void, onThinking?: (chunk: string) => void): Promise<{ content: string; stats?: ResponseStats; thinking?: string }> {
@@ -448,23 +451,28 @@ export class OpenAIProvider implements AIProvider {
         }
         this.abortController = new AbortController();
 
-        if (!this.apiKey) {
-            throw new Error('OpenAI API key not configured. Set it in settings: local-copilot.openaiApiKey');
+        if (!this.apiKey && this.providerId === 'openai') {
+            throw new Error('OpenAI API key not configured. Set it in the Settings (⚙) button.');
         }
 
-        const body = JSON.stringify({
-            model: this.model,
+        const bodyObj: any = {
             messages: messages,
             stream: true
-        });
+        };
+        if (this.model) {
+            bodyObj.model = this.model;
+        }
+        const body = JSON.stringify(bodyObj);
+
+        const headers: any = { 'Content-Type': 'application/json' };
+        if (this.apiKey) {
+            headers['Authorization'] = `Bearer ${this.apiKey}`;
+        }
 
         const response = await makeRequest(
             `${this.endpoint}/chat/completions`,
             'POST',
-            {
-                'Content-Type': 'application/json',
-                'Authorization': `Bearer ${this.apiKey}`
-            },
+            headers,
             body,
             this.abortController.signal
         );
@@ -539,10 +547,10 @@ export class JanAIProvider implements AIProvider {
     private endpoint: string;
     private model: string;
 
-    constructor(modelOverride?: string) {
-        const config = vscode.workspace.getConfiguration('local-copilot');
-        this.endpoint = config.get<string>('janaiEndpoint', 'http://127.0.0.1:1337/v1');
-        this.model = modelOverride || config.get<string>('janaiModel', '');
+    constructor(providerId: string = 'janai', modelOverride?: string) {
+        const cfg = getProviderConfig(providerId);
+        this.endpoint = cfg.endpoint || 'http://127.0.0.1:1337/v1';
+        this.model = modelOverride || cfg.model || '';
         console.log('[Local Copilot] Created JanAIProvider with endpoint:', this.endpoint, 'model:', this.model);
     }
 
@@ -748,21 +756,20 @@ function dataPartToDataUrl(part: vscode.LanguageModelDataPart): string | undefin
 
 export function createAIProvider(type: string, modelOverride?: string): AIProvider {
     console.log('[Local Copilot] Creating AI provider of type:', type, 'model override:', modelOverride);
-    switch (type) {
+    const connType = getProviderType(type);
+    switch (connType) {
         case 'ollama':
-            return new OllamaProvider(modelOverride);
-        case 'lmstudio':
-            return new LMStudioProvider(modelOverride);
-        case 'janai':
-            return new JanAIProvider(modelOverride);
+            return new OllamaProvider(type, modelOverride);
         case 'openai':
-            return new OpenAIProvider();
+            if (type === 'lmstudio') return new LMStudioProvider(type, modelOverride);
+            if (type === 'janai') return new JanAIProvider(type, modelOverride);
+            return new OpenAIProvider(type);
         case 'copilot-web':
             return new CopilotWebProvider();
         case 'vscode-lm':
             return new VSCodeLMProvider(modelOverride);
         default:
-            return new OllamaProvider(modelOverride);
+            return new OpenAIProvider(type);
     }
 }
 
@@ -771,10 +778,10 @@ export class LMStudioProvider implements AIProvider {
     private endpoint: string;
     private model: string;
 
-    constructor(modelOverride?: string) {
-        const config = vscode.workspace.getConfiguration('local-copilot');
-        this.endpoint = config.get<string>('lmstudioEndpoint', 'http://127.0.0.1:1234/v1');
-        this.model = modelOverride || config.get<string>('lmstudioModel', '');
+    constructor(providerId: string = 'lmstudio', modelOverride?: string) {
+        const cfg = getProviderConfig(providerId);
+        this.endpoint = cfg.endpoint || 'http://127.0.0.1:1234/v1';
+        this.model = modelOverride || cfg.model || '';
         console.log('[Local Copilot] Created LMStudioProvider with endpoint:', this.endpoint, 'model:', this.model);
     }
 

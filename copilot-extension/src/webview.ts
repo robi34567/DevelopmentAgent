@@ -505,6 +505,176 @@ export function getWebviewContent(extensionUri: vscode.Uri, webview: vscode.Webv
         .image-preview-remove:hover {
             background: var(--vscode-inputValidation-errorBorder);
         }
+        #config-btn {
+            background: none;
+            border: 1px solid var(--vscode-panel-border);
+            color: var(--vscode-editor-foreground);
+            padding: 4px 10px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 13px;
+            line-height: 1;
+        }
+        #config-btn:hover {
+            background: var(--vscode-button-hoverBackground);
+            color: var(--vscode-button-foreground);
+        }
+        #config-overlay {
+            display: none;
+            position: fixed;
+            top: 0; left: 0; right: 0; bottom: 0;
+            background: rgba(0,0,0,0.5);
+            z-index: 100;
+            align-items: flex-start;
+            justify-content: center;
+            overflow-y: auto;
+            padding: 40px 16px;
+        }
+        #config-overlay.open { display: flex; }
+        #config-modal {
+            background: var(--vscode-editor-background);
+            border: 1px solid var(--vscode-panel-border);
+            border-radius: 8px;
+            width: 100%;
+            max-width: 620px;
+            padding: 16px 20px;
+            box-shadow: 0 8px 30px rgba(0,0,0,0.4);
+            max-height: 85vh;
+            overflow-y: auto;
+        }
+        #config-modal h2 {
+            font-size: 16px;
+            font-weight: 600;
+            margin: 0 0 4px 0;
+        }
+        #config-modal .config-path {
+            font-size: 11px;
+            color: var(--vscode-descriptionForeground);
+            margin: 0 0 14px 0;
+            word-break: break-all;
+        }
+        #config-modal .config-section {
+            font-size: 12px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            color: var(--vscode-descriptionForeground);
+            margin: 14px 0 8px 0;
+            border-top: 1px solid var(--vscode-panel-border);
+            padding-top: 10px;
+        }
+        #config-modal label {
+            display: block;
+            font-size: 11px;
+            color: var(--vscode-descriptionForeground);
+            margin: 8px 0 3px 0;
+        }
+        #config-modal input[type="text"],
+        #config-modal input[type="password"],
+        #config-modal select,
+        #config-modal textarea {
+            width: 100%;
+            padding: 5px 8px;
+            border-radius: 4px;
+            border: 1px solid var(--vscode-input-border);
+            background: var(--vscode-input-background);
+            color: var(--vscode-input-foreground);
+            font-size: 12px;
+            font-family: inherit;
+            box-sizing: border-box;
+        }
+        #config-modal textarea {
+            min-height: 90px;
+            resize: vertical;
+            line-height: 1.4;
+        }
+        #config-modal .config-actions {
+            display: flex;
+            gap: 8px;
+            justify-content: flex-end;
+            margin-top: 16px;
+        }
+        #config-modal .config-actions button {
+            padding: 6px 16px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 12px;
+            font-weight: 500;
+        }
+        #config-modal .config-actions .save-btn {
+            background: var(--vscode-button-background);
+            color: var(--vscode-button-foreground);
+        }
+        #config-modal .config-actions .save-btn:hover { background: var(--vscode-button-hoverBackground); }
+        #config-modal .config-actions .cancel-btn {
+            background: var(--vscode-button-secondaryBackground);
+            color: var(--vscode-button-secondaryForeground);
+        }
+        #config-modal .config-actions .cancel-btn:hover { background: var(--vscode-button-secondaryHoverBackground); }
+        #config-modal .config-status {
+            font-size: 11px;
+            margin-top: 8px;
+            color: var(--vscode-testing-iconPassed);
+            min-height: 14px;
+        }
+        #config-providers {
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }
+        #config-add-provider {
+            margin-top: 10px;
+            padding: 6px 12px;
+            border: 1px dashed var(--vscode-panel-border);
+            border-radius: 4px;
+            background: none;
+            color: var(--vscode-editor-foreground);
+            cursor: pointer;
+            font-size: 12px;
+            width: 100%;
+        }
+        #config-add-provider:hover {
+            background: var(--vscode-button-hoverBackground);
+            color: var(--vscode-button-foreground);
+        }
+        .provider-block {
+            border: 1px solid var(--vscode-panel-border);
+            border-radius: 6px;
+            padding: 8px 12px;
+            background: var(--vscode-sideBar-background);
+        }
+        .provider-block-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 6px;
+        }
+        .provider-name {
+            font-size: 12px;
+            font-weight: 600;
+        }
+        .provider-delete {
+            background: none;
+            border: none;
+            color: var(--vscode-errorForeground);
+            cursor: pointer;
+            font-size: 13px;
+            padding: 2px 6px;
+            border-radius: 4px;
+        }
+        .provider-delete:hover { background: var(--vscode-inputValidation-errorBackground); }
+        .provider-delete:disabled { opacity: 0.35; cursor: not-allowed; }
+        .provider-block .pf-row {
+            display: flex;
+            gap: 8px;
+        }
+        .provider-block .pf-row > div { flex: 1; }
+        .provider-block .hidden { display: none; }
+        .provider-block-hint {
+            font-size: 10px;
+            color: var(--vscode-descriptionForeground);
+        }
     </style>
 </head>
 <body>
@@ -512,12 +682,7 @@ export function getWebviewContent(extensionUri: vscode.Uri, webview: vscode.Webv
         <h1><span class="icon">🤖</span> Local Copilot</h1>
         <div id="header-controls">
             <select id="provider-select">
-                <option value="ollama">Ollama (Local)</option>
-                <option value="lmstudio">LM Studio (Local)</option>
-                <option value="janai">JAN AI (Local)</option>
-                <option value="openai">OpenAI</option>
-                <option value="copilot-web">GitHub Copilot</option>
-                <option value="vscode-lm">VS Code LM API</option>
+                <option value="">Loading...</option>
             </select>
             <select id="model-select" style="display:none;">
                 <option value="">Loading models...</option>
@@ -533,6 +698,34 @@ export function getWebviewContent(extensionUri: vscode.Uri, webview: vscode.Webv
             <button id="batch-benchmark-btn" title="Run benchmark against all discovered models">Batch</button>
             <button id="thinking-toggle" class="active" title="Toggle model thinking/reasoning display">🧠 Thinking ON</button>
             <button id="clear-btn">Clear</button>
+            <button id="config-btn" title="Provider and settings">&#9881;</button>
+        </div>
+    </div>
+    <div id="config-overlay">
+        <div id="config-modal">
+            <h2>Settings</h2>
+            <p class="config-path">Config file: <span id="config-path"></span></p>
+            <div class="config-section">General</div>
+            <label for="config-active-provider">Active Provider</label>
+            <select id="config-active-provider">
+                <option value="">Loading...</option>
+            </select>
+            <label for="config-approval">Approval Mode</label>
+            <select id="config-approval">
+                <option value="safe">Auto: Safe Only</option>
+                <option value="all">Auto: All</option>
+                <option value="ask">Always Ask</option>
+            </select>
+            <label for="config-system-prompt">System Prompt</label>
+            <textarea id="config-system-prompt" placeholder="Leave empty to use the default prompt"></textarea>
+            <div class="config-section">Providers</div>
+            <div id="config-providers"></div>
+            <button id="config-add-provider" type="button" title="Add a new provider">+ Add provider</button>
+            <div class="config-actions">
+                <button class="save-btn" id="config-save-btn">Save</button>
+                <button class="cancel-btn" id="config-cancel-btn">Cancel</button>
+            </div>
+            <div class="config-status" id="config-status"></div>
         </div>
     </div>
     <div id="session-bar">

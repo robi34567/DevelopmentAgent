@@ -51,6 +51,10 @@
       {
         "command": "local-copilot.toggleThinking",
         "title": "Local Copilot: Toggle Thinking Display"
+      },
+      {
+        "command": "local-copilot.openConfigFile",
+        "title": "Local Copilot: Open Config File"
       }
     ],
     "configuration": {

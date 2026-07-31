@@ -238,7 +238,7 @@
     providerSelect.addEventListener('change', function() {
         vscode.postMessage({ type: 'changeProvider', provider: this.value });
         modelSelect.innerHTML = '<option value="">Loading models...</option>';
-        if (this.value === 'ollama' || this.value === 'lmstudio' || this.value === 'janai' || this.value === 'vscode-lm') {
+        if (providerCanFetchModels(this.value)) {
             modelSelect.style.display = '';
             vscode.postMessage({ type: 'fetchModels', provider: this.value });
         } else {
@@ -685,7 +685,7 @@
                 case 'setProvider':
                     providerSelect.value = message.provider;
                     modelSelect.innerHTML = '<option value="">Loading models...</option>';
-                    if (message.provider === 'ollama' || message.provider === 'lmstudio' || message.provider === 'janai' || message.provider === 'vscode-lm') {
+                    if (providerCanFetchModels(message.provider)) {
                         modelSelect.style.display = '';
                         vscode.postMessage({ type: 'fetchModels', provider: message.provider });
                     } else {
@@ -952,6 +952,10 @@
                         allThinking[ti].open = showThinking;
                     }
                     break;
+                case 'configLoaded':
+                case 'configSaved':
+                    applyConfig(message.config, message.configPath || '');
+                    break;
             }
         } catch(e) {
             addMessage('system', 'Internal error handling message: ' + e.message);
@@ -962,13 +966,238 @@
 
     stopBtn.disabled = true;
 
+    // ----- Config UI -----
+    var currentConfig = null;
+    var configOverlay = document.getElementById('config-overlay');
+    var configBtn = document.getElementById('config-btn');
+    var configProviders = document.getElementById('config-providers');
+    var configAddBtn = document.getElementById('config-add-provider');
+
+    function field(id) { return document.getElementById(id); }
+
+    function setFieldValue(id, value) {
+        var el = field(id);
+        if (el && value !== undefined && value !== null) el.value = value;
+    }
+
+    function providerCanFetchModels(id) {
+        if (!id) return false;
+        if (currentConfig && currentConfig.providers && currentConfig.providers[id]) {
+            var t = currentConfig.providers[id].type;
+            return t === 'ollama' || t === 'openai' || t === 'vscode-lm';
+        }
+        return id === 'ollama' || id === 'lmstudio' || id === 'janai' || id === 'vscode-lm';
+    }
+
+    function updateProviderBlockVisibility(div) {
+        var type = div.querySelector('.pf-type').value;
+        var epWrap = div.querySelector('.pf-endpoint-wrap');
+        var modelRow = div.querySelector('.pf-model-row');
+        var keyWrap = div.querySelector('.pf-key-wrap');
+        var hint = div.querySelector('.pf-hint');
+        epWrap.classList.toggle('hidden', type === 'copilot-web');
+        modelRow.classList.toggle('hidden', type === 'copilot-web');
+        keyWrap.classList.toggle('hidden', type !== 'openai');
+        hint.classList.toggle('hidden', type !== 'copilot-web');
+    }
+
+    function buildProviderBlock(id, p) {
+        p = p || {};
+        var type = p.type || 'openai';
+        var div = document.createElement('div');
+        div.className = 'provider-block';
+        div.innerHTML =
+            '<div class="provider-block-header">' +
+            '  <span class="provider-name">' + escapeHtml(p.label || id) + '</span>' +
+            '  <button type="button" class="provider-delete" title="Delete provider">&#128465;</button>' +
+            '</div>' +
+            '<div class="pf-row">' +
+            '  <div><label>ID</label><input type="text" class="pf-id" value="' + escapeHtml(id) + '"></div>' +
+            '  <div><label>Label</label><input type="text" class="pf-label" value="' + escapeHtml(p.label || id) + '"></div>' +
+            '</div>' +
+            '<div class="pf-row"><div><label>Type</label><select class="pf-type">' +
+            '  <option value="ollama">Ollama compatible</option>' +
+            '  <option value="openai">OpenAI compatible</option>' +
+            '  <option value="copilot-web">GitHub Copilot</option>' +
+            '  <option value="vscode-lm">VS Code LM</option>' +
+            '</select></div></div>' +
+            '<label class="pf-endpoint-wrap">Endpoint' +
+            '  <input type="text" class="pf-endpoint" value="' + escapeHtml(p.endpoint || '') + '" placeholder="http://host:port/v1">' +
+            '</label>' +
+            '<div class="pf-row pf-model-row">' +
+            '  <div><label>Model</label><input type="text" class="pf-model" value="' + escapeHtml(p.model || '') + '"></div>' +
+            '  <div class="pf-key-wrap"><label>API Key</label><input type="password" class="pf-key" value="' + escapeHtml(p.apiKey || '') + '" placeholder="sk-..."></div>' +
+            '</div>' +
+            '<p class="provider-block-hint pf-hint hidden">Uses your installed GitHub Copilot extension.</p>';
+        div.querySelector('.pf-type').value = type;
+        updateProviderBlockVisibility(div);
+        div.querySelector('.pf-type').addEventListener('change', function() { updateProviderBlockVisibility(div); });
+        div.querySelector('.pf-id').addEventListener('input', function() {
+            div.querySelector('.provider-name').textContent = div.querySelector('.pf-label').value.trim() || this.value;
+        });
+        div.querySelector('.pf-label').addEventListener('input', function() {
+            div.querySelector('.provider-name').textContent = this.value.trim() || div.querySelector('.pf-id').value;
+        });
+        div.querySelector('.provider-delete').addEventListener('click', function() {
+            if (document.querySelectorAll('#config-providers .provider-block').length <= 1) return;
+            var wasActive = field('config-active-provider').value === id;
+            div.remove();
+            updateDeleteButtons();
+            rebuildProviderOptions();
+            if (wasActive) {
+                var first = document.querySelector('#config-providers .provider-block .pf-id');
+                if (first) field('config-active-provider').value = first.value;
+            }
+        });
+        return div;
+    }
+
+    function updateDeleteButtons() {
+        var blocks = document.querySelectorAll('#config-providers .provider-block');
+        var canDelete = blocks.length > 1;
+        for (var i = 0; i < blocks.length; i++) {
+            blocks[i].querySelector('.provider-delete').disabled = !canDelete;
+        }
+    }
+
+    function renderProviderBlocks(cfg) {
+        configProviders.innerHTML = '';
+        var prov = (cfg && cfg.providers) || {};
+        var keys = Object.keys(prov);
+        for (var i = 0; i < keys.length; i++) {
+            configProviders.appendChild(buildProviderBlock(keys[i], prov[keys[i]]));
+        }
+        updateDeleteButtons();
+    }
+
+    function rebuildProviderOptions() {
+        var prov = (currentConfig && currentConfig.providers) || {};
+        var keys = Object.keys(prov);
+        function fill(sel) {
+            sel.innerHTML = '';
+            for (var i = 0; i < keys.length; i++) {
+                var opt = document.createElement('option');
+                opt.value = keys[i];
+                opt.textContent = (prov[keys[i]].label || keys[i]) + (keys[i] === (currentConfig && currentConfig.aiProvider) ? ' (active)' : '');
+                sel.appendChild(opt);
+            }
+            if (keys.length === 0) {
+                var empty = document.createElement('option');
+                empty.value = '';
+                empty.textContent = 'No providers';
+                sel.appendChild(empty);
+            }
+        }
+        fill(providerSelect);
+        fill(field('config-active-provider'));
+        var active = currentConfig && (currentConfig.aiProvider || currentConfig.activeProvider);
+        if (active) {
+            providerSelect.value = active;
+            field('config-active-provider').value = active;
+        }
+    }
+
+    function applyConfig(cfg, path) {
+        currentConfig = cfg;
+        if (path && field('config-path')) field('config-path').textContent = path;
+        if (!cfg) return;
+        if (cfg.approvalMode) {
+            setFieldValue('config-approval', cfg.approvalMode);
+            if (approvalSelect) approvalSelect.value = cfg.approvalMode;
+        }
+        if (cfg.systemPrompt !== undefined) setFieldValue('config-system-prompt', cfg.systemPrompt);
+        rebuildProviderOptions();
+        renderProviderBlocks(cfg);
+        var active = cfg.aiProvider || cfg.activeProvider;
+        if (active && providerCanFetchModels(active)) {
+            modelSelect.style.display = '';
+            vscode.postMessage({ type: 'fetchModels', provider: active });
+        } else if (active) {
+            modelSelect.style.display = 'none';
+        }
+    }
+
+    function collectProviders() {
+        var providers = {};
+        var blocks = document.querySelectorAll('#config-providers .provider-block');
+        for (var i = 0; i < blocks.length; i++) {
+            var blk = blocks[i];
+            var id = blk.querySelector('.pf-id').value.trim();
+            if (!id) continue;
+            var type = blk.querySelector('.pf-type').value;
+            var p = {
+                type: type,
+                label: blk.querySelector('.pf-label').value.trim() || id
+            };
+            var epEl = blk.querySelector('.pf-endpoint');
+            if (epEl && !epEl.classList.contains('hidden') && epEl.value.trim()) p.endpoint = epEl.value.trim();
+            var modelEl = blk.querySelector('.pf-model');
+            if (modelEl && !modelEl.classList.contains('hidden') && modelEl.value.trim()) p.model = modelEl.value.trim();
+            var keyEl = blk.querySelector('.pf-key');
+            if (keyEl && !keyEl.classList.contains('hidden') && keyEl.value) p.apiKey = keyEl.value;
+            providers[id] = p;
+        }
+        return providers;
+    }
+
+    if (configBtn && configOverlay) {
+        configBtn.addEventListener('click', function() {
+            vscode.postMessage({ type: 'getConfig' });
+            configOverlay.classList.add('open');
+            var statusEl = field('config-status');
+            if (statusEl) statusEl.textContent = '';
+        });
+        field('config-cancel-btn').addEventListener('click', function() {
+            configOverlay.classList.remove('open');
+        });
+        configOverlay.addEventListener('click', function(e) {
+            if (e.target === configOverlay) configOverlay.classList.remove('open');
+        });
+        configAddBtn.addEventListener('click', function() {
+            configProviders.appendChild(buildProviderBlock('', { type: 'openai', label: 'New Provider' }));
+            updateDeleteButtons();
+            var last = configProviders.lastElementChild;
+            if (last) last.querySelector('.pf-id').focus();
+        });
+        field('config-save-btn').addEventListener('click', function() {
+            var providers = collectProviders();
+            var active = field('config-active-provider').value;
+            if (!providers[active]) {
+                var firstId = Object.keys(providers)[0];
+                active = firstId || '';
+            }
+            var cfg = {
+                aiProvider: active,
+                approvalMode: field('config-approval').value,
+                systemPrompt: field('config-system-prompt').value,
+                providers: providers
+            };
+            if (Object.keys(providers).length === 0) {
+                var statusEl = field('config-status');
+                if (statusEl) {
+                    statusEl.textContent = 'At least one provider is required.';
+                    statusEl.style.color = 'var(--vscode-errorForeground)';
+                }
+                return;
+            }
+            vscode.postMessage({ type: 'saveConfig', config: cfg });
+            configOverlay.classList.remove('open');
+            var statusEl = field('config-status');
+            if (statusEl) {
+                statusEl.textContent = 'Config saved. New provider/model settings are active.';
+                statusEl.style.color = 'var(--vscode-testing-iconPassed)';
+            }
+        });
+    }
+
+    vscode.postMessage({ type: 'getConfig' });
     vscode.postMessage({ type: 'getChatState' });
     vscode.postMessage({ type: 'getCmdHistory' });
     vscode.postMessage({ type: 'getApproval' });
     vscode.postMessage({ type: 'getSessions' });
     vscode.postMessage({ type: 'getThinkingState' });
 
-    if (providerSelect.value === 'ollama' || providerSelect.value === 'lmstudio' || providerSelect.value === 'janai' || providerSelect.value === 'vscode-lm') {
+    if (providerSelect.value && providerCanFetchModels(providerSelect.value)) {
         modelSelect.style.display = '';
         vscode.postMessage({ type: 'fetchModels' });
     }
