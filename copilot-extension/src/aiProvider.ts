@@ -283,17 +283,97 @@ export class OllamaProvider implements AIProvider {
         console.log('[Local Copilot] Created OllamaProvider with endpoint:', this.endpoint, 'model:', this.model);
     }
 
+    private isImageError(contentOrMsg: string): boolean {
+        const lower = contentOrMsg.toLowerCase();
+        if (!lower.includes('image')) return false;
+        if (lower.includes('does not support')) return true;
+        if (lower.includes('not support')) return true;
+        if (lower.includes('no support')) return true;
+        if (lower.includes('unsupported')) return true;
+        if (lower.includes('cannot read') || lower.includes('can not read')) return true;
+        return false;
+    }
+
     async sendMessage(messages: ChatMessage[], onChunk: (chunk: string) => void, onThinking?: (chunk: string) => void): Promise<{ content: string; stats?: ResponseStats; thinking?: string }> {
         if (this.abortController) {
             this.abortController.abort();
         }
         this.abortController = new AbortController();
 
-        // Convert ChatMessageImage[] to base64 strings for Ollama API
+        const hasImages = messages.some(m => m.images && m.images.length > 0);
+
+        // Try with images first (buffered — don't stream to user yet so we can detect image errors)
+        if (hasImages) {
+            const ollamaMessagesWithImages = messages.map(msg => {
+                const m: any = { role: msg.role, content: msg.content };
+                if (msg.images && msg.images.length > 0) {
+                    m.images = msg.images.map(i => i.base64);
+                }
+                return m;
+            });
+
+            const bodyWithImages = JSON.stringify({
+                model: this.model,
+                messages: ollamaMessagesWithImages,
+                stream: true
+            });
+
+            const url = `${this.endpoint}/api/chat`;
+            console.log('[Local Copilot] Ollama sending request with images to:', url, 'model:', this.model);
+
+            try {
+                const response = await makeRequest(
+                    url,
+                    'POST',
+                    { 'Content-Type': 'application/json' },
+                    bodyWithImages,
+                    this.abortController.signal
+                );
+
+                if (response.status < 200 || response.status >= 300) {
+                    const errorBody = await new Promise<string>((resolve) => {
+                        let data = '';
+                        response.body.setEncoding('utf-8');
+                        response.body.on('data', (chunk: string) => { data += chunk; });
+                        response.body.on('end', () => resolve(data));
+                        response.body.on('close', () => resolve(data));
+                    });
+                    // Check if error is image-related
+                    if (this.isImageError(errorBody)) {
+                        console.log('[Local Copilot] Model does not support images, falling back to text');
+                        // fall through to text-only retry
+                    } else {
+                        throw new Error(`Ollama API error ${response.status}: ${errorBody.substring(0, 200)}`);
+                    }
+                } else {
+                    // Buffer the response — don't stream to user yet so we can check for image errors
+                    const noop = () => {};
+                    const result = await readStream(response.body, noop, onThinking);
+                    if (this.isImageError(result.content)) {
+                        console.log('[Local Copilot] Model does not support images (in content), falling back to text');
+                        // fall through to text-only retry
+                    } else {
+                        // Good response — now stream it to the user
+                        try { onChunk(result.content); } catch (e) {}
+                        console.log('[Local Copilot] Stream completed, total chars:', result.content.length, 'stats:', result.stats, 'thinking:', result.thinking ? result.thinking.length + ' chars' : 'none');
+                        return { content: result.content, stats: result.stats, thinking: result.thinking };
+                    }
+                }
+            } catch (err: any) {
+                if (this.isImageError(err.message || '')) {
+                    console.log('[Local Copilot] Image error caught, falling back to text-only');
+                    // fall through
+                } else {
+                    throw err;
+                }
+            }
+        }
+
+        // Retry without images (or initial request if no images)
         const ollamaMessages = messages.map(msg => {
             const m: any = { role: msg.role, content: msg.content };
-            if (msg.images && msg.images.length > 0) {
-                m.images = msg.images.map(i => i.base64);
+            if (msg.images && msg.images.length > 0 && hasImages) {
+                // Strip images for non-vision model
             }
             return m;
         });
@@ -337,8 +417,9 @@ export class OllamaProvider implements AIProvider {
         }
 
         const result = await readStream(response.body, onChunk, onThinking);
+        const prefix = hasImages ? '⚠️ The model does not support image input. Only text was sent.\n\n' : '';
         console.log('[Local Copilot] Stream completed, total chars:', result.content.length, 'stats:', result.stats, 'thinking:', result.thinking ? result.thinking.length + ' chars' : 'none');
-        return { content: result.content, stats: result.stats, thinking: result.thinking };
+        return { content: prefix + result.content, stats: result.stats, thinking: result.thinking };
     }
 
     abort(): void {
@@ -582,7 +663,13 @@ export class VSCodeLMProvider implements AIProvider {
 
     private isImageError(content: string): boolean {
         const lower = content.toLowerCase();
-        return lower.includes('cannot read') && lower.includes('image') && lower.includes('does not support');
+        if (!lower.includes('image')) return false;
+        if (lower.includes('does not support')) return true;
+        if (lower.includes('not support')) return true;
+        if (lower.includes('no support')) return true;
+        if (lower.includes('unsupported')) return true;
+        if (lower.includes('cannot read') || lower.includes('can not read')) return true;
+        return false;
     }
 
     async sendMessage(messages: ChatMessage[], onChunk: (chunk: string) => void, onThinking?: (chunk: string) => void): Promise<{ content: string; stats?: ResponseStats; thinking?: string }> {
@@ -619,7 +706,12 @@ export class VSCodeLMProvider implements AIProvider {
                     return { content };
                 }
             } catch (err: any) {
-                if (!err.message?.toLowerCase().includes('image')) throw err;
+                if (err instanceof vscode.LanguageModelError) {
+                    // VS Code LM API rejected images (any LanguageModelError during image send)
+                    console.log('[Local Copilot] VS Code LM API rejected images, falling back to text-only, code:', err.code, 'message:', err.message);
+                } else if (!err.message?.toLowerCase().includes('image')) {
+                    throw err;
+                }
                 // API rejected images — fall through to retry
             }
         }

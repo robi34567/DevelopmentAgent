@@ -436,6 +436,7 @@
                 '<div style="font-size:13px;">' + escapedQ.replace(/\n/g, '<br>') + '</div>' +
                 '</div>';
         });
+        escaped = escaped.replace(/\[CHOICES\][\s\S]*?\[\/CHOICES\]/g, '');
         escaped = escaped.replace(/\[CMD\]([\s\S]*?)\[\/CMD\]/g, function(match, cmd) {
             var escapedCmd = escapeHtml(cmd);
             var cmdForAttr = cmd.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
@@ -804,21 +805,70 @@
                     var choicesDiv = document.createElement('div');
                     choicesDiv.className = 'approval-prompt';
                     choicesDiv.id = message.id;
-                    var html = '<div class="approval-label">Choose an option:</div>';
+                    var regularChoices = [];
+                    var seenCustomLike = false;
                     for (var ci = 0; ci < message.choices.length; ci++) {
-                        var choiceLabel = escapeHtml(message.choices[ci]);
+                        var chStr = String(message.choices[ci]).trim();
+                        var chLower = chStr.toLowerCase();
+                        if (chStr === '__custom__' || chLower === 'custom' || chLower === 'custom...' || chLower === 'custom option' || chLower === 'other' || chLower === 'something else' || chLower === 'type your own') {
+                            seenCustomLike = true;
+                        } else {
+                            regularChoices.push(chStr);
+                        }
+                    }
+                    var html = '<div class="approval-label">Choose an option:</div>';
+                    for (var ci2 = 0; ci2 < regularChoices.length; ci2++) {
+                        var choiceLabel = escapeHtml(regularChoices[ci2]);
                         html += '<button class="choice-btn" data-choice="' + choiceLabel.replace(/"/g, '&quot;') + '" style="display:block;width:100%;margin:4px 0;padding:6px 12px;background:var(--vscode-button-background);color:var(--vscode-button-foreground);border:none;border-radius:4px;cursor:pointer;font-size:12px;text-align:left;">' + choiceLabel + '</button>';
                     }
+                    html += '<button id="custom-choice-open" class="choice-custom" style="display:block;width:100%;margin:4px 0;padding:6px 12px;background:var(--vscode-button-secondaryBackground);color:var(--vscode-button-secondaryForeground);border:none;border-radius:4px;cursor:pointer;font-size:12px;text-align:left;">&#9998; Custom...</button>' +
+                        '<div id="custom-choice-editor" style="display:none;margin-top:4px;">' +
+                        '<div style="display:flex;gap:6px;">' +
+                        '<input id="custom-choice-input" type="text" placeholder="Type your own answer..." style="flex:1;padding:6px 8px;border-radius:4px;border:1px solid var(--vscode-panel-border);background:var(--vscode-input-background);color:var(--vscode-input-foreground);font-size:12px;">' +
+                        '<button id="custom-choice-submit" style="padding:6px 12px;background:var(--vscode-button-background);color:var(--vscode-button-foreground);border:none;border-radius:4px;cursor:pointer;font-size:12px;white-space:nowrap;">Submit</button>' +
+                        '</div>' +
+                        '<div style="font-size:10px;color:var(--vscode-descriptionForeground);margin-top:3px;">Press Enter to submit</div>' +
+                        '</div>';
                     choicesDiv.innerHTML = html;
                     chatContainer.appendChild(choicesDiv);
                     chatContainer.scrollTop = chatContainer.scrollHeight;
+                    function disableAllChoiceButtons() {
+                        choicesDiv.querySelectorAll('.choice-btn, .choice-custom').forEach(function(b) { b.disabled = true; b.style.opacity = '0.5'; });
+                    }
                     choicesDiv.querySelectorAll('.choice-btn').forEach(function(btn) {
                         btn.addEventListener('click', function() {
-                            var choice = btn.dataset.choice;
-                            choicesDiv.querySelectorAll('.choice-btn').forEach(function(b) { b.disabled = true; b.style.opacity = '0.5'; });
+                            disableAllChoiceButtons();
+                            var editor = document.getElementById('custom-choice-editor');
+                            if (editor) { editor.style.display = 'none'; }
                             btn.textContent = '✓ ' + btn.textContent;
-                            vscode.postMessage({ type: 'choiceResponse', choice: choice });
+                            vscode.postMessage({ type: 'choiceResponse', choice: btn.dataset.choice });
                         });
+                    });
+                    var openBtn = document.getElementById('custom-choice-open');
+                    var editor = document.getElementById('custom-choice-editor');
+                    var inputEl = document.getElementById('custom-choice-input');
+                    var submitEl = document.getElementById('custom-choice-submit');
+                    openBtn.addEventListener('click', function() {
+                        disableAllChoiceButtons();
+                        openBtn.disabled = true;
+                        openBtn.style.opacity = '0.5';
+                        openBtn.textContent = '✏️ Custom...';
+                        editor.style.display = '';
+                        setTimeout(function() { inputEl.focus(); }, 50);
+                    });
+                    inputEl.addEventListener('keydown', function(e) {
+                        if (e.key === 'Enter') {
+                            e.preventDefault();
+                            submitEl.click();
+                        }
+                    });
+                    submitEl.addEventListener('click', function() {
+                        var text = inputEl.value.trim();
+                        if (!text) { inputEl.focus(); return; }
+                        inputEl.disabled = true;
+                        submitEl.disabled = true;
+                        submitEl.textContent = '✓ Sent';
+                        vscode.postMessage({ type: 'choiceResponse', choice: text });
                     });
                     break;
                 case 'stopComplete':

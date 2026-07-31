@@ -1001,7 +1001,7 @@ function extractAskBlocks(text: string): string[] {
 }
 
 function extractChoicesBlock(text: string): string[] | null {
-    const regex = /\[CHOICES\]([\s\S]*?)\[\/CHOICES\]/g;
+    const regex = /\[CHOICES\]([\s\S]*?)(?:\[\/CHOICES\]|$)/g;
     const match = regex.exec(text);
     if (!match) return null;
     const raw = match[1].trim();
@@ -1829,6 +1829,9 @@ async function handleSendMessage(text: string, images?: { base64: string; mimeTy
         isProcessingMessage = false;
     }
 
+    // Auto-rename session from first user message if still using timestamp name
+    await autoRenameSession(provider);
+
     // Compress chat history if it exceeds the threshold
     await compressChatHistory(provider);
 }
@@ -2144,6 +2147,35 @@ function runSelectedInTerminal() {
     const terminal = vscode.window.activeTerminal || vscode.window.createTerminal('Local Copilot');
     terminal.show();
     terminal.sendText(text, true);
+}
+
+async function autoRenameSession(provider: AIProvider) {
+    const id = getActiveSessionId();
+    if (!id) return;
+    const session = loadSession(id);
+    if (!session) return;
+    // Only rename if name is the auto-generated timestamp pattern
+    if (!/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}/.test(session.name)) return;
+    // Find the first meaningful user message
+    const firstUserMsg = chatHistory.find(m => m.role === 'user' && m.content && !m.content.startsWith('Command:'));
+    if (!firstUserMsg) return;
+    try {
+        const titleMsgs: ChatMessage[] = [
+            { role: 'system', content: 'You are a chat session titler. Read the user message below and respond with ONLY a very short title (2-6 words) that summarizes the topic. No punctuation, no explanation. Reply with the title only.' },
+            { role: 'user', content: firstUserMsg.content }
+        ];
+        const result = await provider.sendMessage(titleMsgs, () => {});
+        const title = result.content.trim().replace(/^["']|["']$/g, '').substring(0, 60);
+        if (title && title.length > 0) {
+            session.name = title;
+            saveSession(session);
+            postMessageToAllViews({ type: 'sessionSaved', sessionId: id, sessionName: title });
+            sendSessionList();
+            logToFile(`[SESSION] Auto-renamed: ${id} -> "${title}"`);
+        }
+    } catch (e: any) {
+        logToFile(`[SESSION] Auto-rename failed: ${e.message}`);
+    }
 }
 
 async function handleReadClipboardImage() {
