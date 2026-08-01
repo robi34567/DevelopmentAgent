@@ -641,3 +641,94 @@ export function createCoreProvider(type: string, modelOverride?: string): AIProv
             return new OpenAIProvider(type);
     }
 }
+
+function httpGetJson(url: string, timeoutMs: number): Promise<string> {
+    return new Promise((resolve, reject) => {
+        const lib = url.startsWith('https:') ? https : http;
+        const req = lib.get(url, (res) => {
+            let data = '';
+            res.on('data', (chunk: Buffer) => { data += chunk.toString(); });
+            res.on('end', () => {
+                if (res.statusCode && res.statusCode >= 400) {
+                    reject(new Error(`Provider returned ${res.statusCode}: ${data.substring(0, 200)}`));
+                    return;
+                }
+                resolve(data);
+            });
+        });
+        req.setTimeout(timeoutMs, () => {
+            req.destroy(new Error('Request timed out'));
+            reject(new Error('Request timed out'));
+        });
+        req.on('error', (err) => {
+            reject(new Error(err.message));
+        });
+    });
+}
+
+export async function fetchOllamaModels(providerId: string = 'ollama'): Promise<string[]> {
+    const cfg = getProviderConfig(providerId);
+    const endpoint = cfg.endpoint || 'http://127.0.0.1:11434';
+    const url = `${endpoint}/api/tags`;
+    console.log('[Local Copilot] Fetching models from:', url);
+    try {
+        const data = await httpGetJson(url, 10000);
+        const parsed = JSON.parse(data);
+        const models = (parsed.models || []).map((m: any) => m.name).sort();
+        console.log('[Local Copilot] Found models:', models);
+        return models;
+    } catch (err: any) {
+        throw new Error(`Cannot connect to Ollama at ${endpoint}: ${err.message}`);
+    }
+}
+
+export async function fetchOpenAICompatibleModels(providerId: string): Promise<string[]> {
+    const cfg = getProviderConfig(providerId);
+    const endpoint = cfg.endpoint || 'http://127.0.0.1:1234/v1';
+    const url = `${endpoint}/models`;
+    console.log('[Local Copilot] Fetching OpenAI-compatible models from:', url);
+    try {
+        const data = await httpGetJson(url, 10000);
+        const parsed = JSON.parse(data);
+        const models = (parsed.data || []).map((m: any) => m.id).sort();
+        console.log('[Local Copilot] Found models:', models);
+        return models;
+    } catch (err: any) {
+        throw new Error(`Cannot connect to provider at ${endpoint}: ${err.message}`);
+    }
+}
+
+export async function fetchOllamaContextSize(providerId: string, modelName: string): Promise<number> {
+    const cfg = getProviderConfig(providerId);
+    const endpoint = cfg.endpoint || 'http://127.0.0.1:11434';
+    const url = `${endpoint}/api/show`;
+    console.log('[Local Copilot] Fetching context size for:', modelName);
+    try {
+        const data = await new Promise<string>((resolve, reject) => {
+            const lib = url.startsWith('https:') ? https : http;
+            const req = lib.request(url, { method: 'POST', headers: { 'Content-Type': 'application/json' } }, (res) => {
+                let d = '';
+                res.on('data', (chunk: Buffer) => { d += chunk.toString(); });
+                res.on('end', () => resolve(d));
+            });
+            req.setTimeout(5000, () => { req.destroy(); reject(new Error('timed out')); });
+            req.on('error', (err) => reject(err));
+            req.write(JSON.stringify({ model: modelName }));
+            req.end();
+        });
+        const parsed = JSON.parse(data);
+        const modelInfo = parsed.model_info || {};
+        let ctxLen = 0;
+        for (const key of Object.keys(modelInfo)) {
+            if (key.toLowerCase().includes('context_length')) {
+                ctxLen = Number(modelInfo[key]) || 0;
+                break;
+            }
+        }
+        const size = ctxLen > 0 ? ctxLen : 0;
+        console.log('[Local Copilot] Context size for', modelName, ':', size);
+        return size;
+    } catch {
+        return 0;
+    }
+}

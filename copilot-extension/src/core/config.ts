@@ -43,6 +43,10 @@ function getConfigDir(): string {
     return configDir;
 }
 
+export function getDataDir(): string {
+    return getConfigDir();
+}
+
 export function getConfigPath(): string {
     return path.join(getConfigDir(), 'config.json');
 }
