@@ -92,13 +92,13 @@ function readStream(stream: http.IncomingMessage, onData: (chunk: string) => voi
                         if (onThinking) { try { onThinking(parsed.message.reasoning_content); } catch (e) {} }
                     }
                     if (parsed.done) {
-                        console.log('[Local Copilot] Stream done signal received');
+                        console.log('[Maggot] Stream done signal received');
                         if (parsed.eval_count !== undefined) evalCount = parsed.eval_count;
                         if (parsed.eval_duration !== undefined) evalDurationNs = parsed.eval_duration;
                         if (parsed.prompt_eval_count !== undefined) promptEvalCount = parsed.prompt_eval_count;
                     }
                 } catch (e) {
-                    console.log('[Local Copilot] Failed to parse line:', trimmed.substring(0, 50));
+                    console.log('[Maggot] Failed to parse line:', trimmed.substring(0, 50));
                 }
             }
         });
@@ -210,7 +210,7 @@ function readSSEStream(stream: http.IncomingMessage, onData: (chunk: string) => 
                         if (onThinking) { try { onThinking(reasoning); } catch (e) {} }
                     }
                 } catch (e) {
-                    console.log('[Local Copilot] Failed to parse SSE line:', trimmed.substring(0, 50));
+                    console.log('[Maggot] Failed to parse SSE line:', trimmed.substring(0, 50));
                 }
             }
         });
@@ -258,7 +258,7 @@ export class OllamaProvider implements AIProvider {
         const cfg = getProviderConfig(providerId);
         this.endpoint = cfg.endpoint || 'http://127.0.0.1:11434';
         this.model = modelOverride || cfg.model || 'qwen2.5-coder:3b';
-        console.log('[Local Copilot] Created OllamaProvider with endpoint:', this.endpoint, 'model:', this.model);
+        console.log('[Maggot] Created OllamaProvider with endpoint:', this.endpoint, 'model:', this.model);
     }
 
     private isImageError(contentOrMsg: string): boolean {
@@ -297,7 +297,7 @@ export class OllamaProvider implements AIProvider {
             });
 
             const url = `${this.endpoint}/api/chat`;
-            console.log('[Local Copilot] Ollama sending request with images to:', url, 'model:', this.model);
+            console.log('[Maggot] Ollama sending request with images to:', url, 'model:', this.model);
 
             try {
                 const response = await makeRequest(
@@ -318,7 +318,7 @@ export class OllamaProvider implements AIProvider {
                     });
                     // Check if error is image-related
                     if (this.isImageError(errorBody)) {
-                        console.log('[Local Copilot] Model does not support images, falling back to text');
+                        console.log('[Maggot] Model does not support images, falling back to text');
                         // fall through to text-only retry
                     } else {
                         throw new Error(`Ollama API error ${response.status}: ${errorBody.substring(0, 200)}`);
@@ -328,18 +328,18 @@ export class OllamaProvider implements AIProvider {
                     const noop = () => {};
                     const result = await readStream(response.body, noop, onThinking);
                     if (this.isImageError(result.content)) {
-                        console.log('[Local Copilot] Model does not support images (in content), falling back to text');
+                        console.log('[Maggot] Model does not support images (in content), falling back to text');
                         // fall through to text-only retry
                     } else {
                         // Good response — now stream it to the user
                         try { onChunk(result.content); } catch (e) {}
-                        console.log('[Local Copilot] Stream completed, total chars:', result.content.length, 'stats:', result.stats, 'thinking:', result.thinking ? result.thinking.length + ' chars' : 'none');
+                        console.log('[Maggot] Stream completed, total chars:', result.content.length, 'stats:', result.stats, 'thinking:', result.thinking ? result.thinking.length + ' chars' : 'none');
                         return { content: result.content, stats: result.stats, thinking: result.thinking };
                     }
                 }
             } catch (err: any) {
                 if (this.isImageError(err.message || '')) {
-                    console.log('[Local Copilot] Image error caught, falling back to text-only');
+                    console.log('[Maggot] Image error caught, falling back to text-only');
                     // fall through
                 } else {
                     throw err;
@@ -363,8 +363,8 @@ export class OllamaProvider implements AIProvider {
         });
 
         const url = `${this.endpoint}/api/chat`;
-        console.log('[Local Copilot] Ollama sending request to:', url, 'model:', this.model);
-        console.log('[Local Copilot] Messages count:', messages.length);
+        console.log('[Maggot] Ollama sending request to:', url, 'model:', this.model);
+        console.log('[Maggot] Messages count:', messages.length);
 
         let response: { status: number; body: http.IncomingMessage };
         try {
@@ -376,11 +376,11 @@ export class OllamaProvider implements AIProvider {
                 this.abortController.signal
             );
         } catch (err: any) {
-            console.error('[Local Copilot] Ollama request failed:', err.message);
+            console.error('[Maggot] Ollama request failed:', err.message);
             throw new Error(`Failed to connect to Ollama at ${this.endpoint}: ${err.message}`);
         }
 
-        console.log('[Local Copilot] Response status:', response.status);
+        console.log('[Maggot] Response status:', response.status);
 
         if (response.status < 200 || response.status >= 300) {
             const errorBody = await new Promise<string>((resolve) => {
@@ -390,7 +390,7 @@ export class OllamaProvider implements AIProvider {
                 response.body.on('end', () => resolve(data));
                 response.body.on('close', () => resolve(data));
             });
-            console.log('[Local Copilot] Error body:', errorBody.substring(0, 200));
+            console.log('[Maggot] Error body:', errorBody.substring(0, 200));
             throw new Error(`Ollama API error ${response.status}: ${errorBody.substring(0, 200)}`);
         }
 
@@ -401,12 +401,12 @@ export class OllamaProvider implements AIProvider {
         if (hasImages && this.isImageError(finalContent)) {
             finalContent = '';
         }
-        console.log('[Local Copilot] Stream completed, total chars:', result.content.length, 'stats:', result.stats, 'thinking:', result.thinking ? result.thinking.length + ' chars' : 'none');
+        console.log('[Maggot] Stream completed, total chars:', result.content.length, 'stats:', result.stats, 'thinking:', result.thinking ? result.thinking.length + ' chars' : 'none');
         return { content: prefix + finalContent, stats: result.stats, thinking: result.thinking };
     }
 
     abort(): void {
-        console.log('[Local Copilot] Aborting request');
+        console.log('[Maggot] Aborting request');
         this.abortController?.abort();
         this.abortController = null;
     }
@@ -493,7 +493,7 @@ export class JanAIProvider implements AIProvider {
         const cfg = getProviderConfig(providerId);
         this.endpoint = cfg.endpoint || 'http://127.0.0.1:1337/v1';
         this.model = modelOverride || cfg.model || '';
-        console.log('[Local Copilot] Created JanAIProvider with endpoint:', this.endpoint, 'model:', this.model);
+        console.log('[Maggot] Created JanAIProvider with endpoint:', this.endpoint, 'model:', this.model);
     }
 
     async sendMessage(messages: ChatMessage[], onChunk: (chunk: string) => void, onThinking?: (chunk: string) => void): Promise<{ content: string; stats?: ResponseStats; thinking?: string }> {
@@ -512,7 +512,7 @@ export class JanAIProvider implements AIProvider {
         const body = JSON.stringify(bodyObj);
 
         const url = `${this.endpoint}/chat/completions`;
-        console.log('[Local Copilot] JAN AI sending request to:', url, 'model:', this.model || '(auto)');
+        console.log('[Maggot] JAN AI sending request to:', url, 'model:', this.model || '(auto)');
 
         let response: { status: number; body: http.IncomingMessage };
         try {
@@ -524,11 +524,11 @@ export class JanAIProvider implements AIProvider {
                 this.abortController.signal
             );
         } catch (err: any) {
-            console.error('[Local Copilot] JAN AI request failed:', err.message);
+            console.error('[Maggot] JAN AI request failed:', err.message);
             throw new Error(`Failed to connect to JAN AI at ${this.endpoint}: ${err.message}`);
         }
 
-        console.log('[Local Copilot] JAN AI response status:', response.status);
+        console.log('[Maggot] JAN AI response status:', response.status);
 
         if (response.status < 200 || response.status >= 300) {
             const errorBody = await new Promise<string>((resolve) => {
@@ -538,7 +538,7 @@ export class JanAIProvider implements AIProvider {
                 response.body.on('end', () => resolve(data));
                 response.body.on('close', () => resolve(data));
             });
-            console.log('[Local Copilot] JAN AI error body:', errorBody.substring(0, 200));
+            console.log('[Maggot] JAN AI error body:', errorBody.substring(0, 200));
             throw new Error(`JAN AI API error ${response.status}: ${errorBody.substring(0, 200)}`);
         }
 
@@ -565,7 +565,7 @@ export class LMStudioProvider implements AIProvider {
         const cfg = getProviderConfig(providerId);
         this.endpoint = cfg.endpoint || 'http://127.0.0.1:1234/v1';
         this.model = modelOverride || cfg.model || '';
-        console.log('[Local Copilot] Created LMStudioProvider with endpoint:', this.endpoint, 'model:', this.model);
+        console.log('[Maggot] Created LMStudioProvider with endpoint:', this.endpoint, 'model:', this.model);
     }
 
     async sendMessage(messages: ChatMessage[], onChunk: (chunk: string) => void, onThinking?: (chunk: string) => void): Promise<{ content: string; stats?: ResponseStats; thinking?: string }> {
@@ -584,7 +584,7 @@ export class LMStudioProvider implements AIProvider {
         const body = JSON.stringify(bodyObj);
 
         const url = `${this.endpoint}/chat/completions`;
-        console.log('[Local Copilot] LM Studio sending request to:', url, 'model:', this.model || '(auto)');
+        console.log('[Maggot] LM Studio sending request to:', url, 'model:', this.model || '(auto)');
 
         let response: { status: number; body: http.IncomingMessage };
         try {
@@ -596,11 +596,11 @@ export class LMStudioProvider implements AIProvider {
                 this.abortController.signal
             );
         } catch (err: any) {
-            console.error('[Local Copilot] LM Studio request failed:', err.message);
+            console.error('[Maggot] LM Studio request failed:', err.message);
             throw new Error(`Failed to connect to LM Studio at ${this.endpoint}: ${err.message}`);
         }
 
-        console.log('[Local Copilot] LM Studio response status:', response.status);
+        console.log('[Maggot] LM Studio response status:', response.status);
 
         if (response.status < 200 || response.status >= 300) {
             const errorBody = await new Promise<string>((resolve) => {
@@ -610,7 +610,7 @@ export class LMStudioProvider implements AIProvider {
                 response.body.on('end', () => resolve(data));
                 response.body.on('close', () => resolve(data));
             });
-            console.log('[Local Copilot] LM Studio error body:', errorBody.substring(0, 200));
+            console.log('[Maggot] LM Studio error body:', errorBody.substring(0, 200));
             throw new Error(`LM Studio API error ${response.status}: ${errorBody.substring(0, 200)}`);
         }
 
@@ -670,12 +670,12 @@ export async function fetchOllamaModels(providerId: string = 'ollama'): Promise<
     const cfg = getProviderConfig(providerId);
     const endpoint = cfg.endpoint || 'http://127.0.0.1:11434';
     const url = `${endpoint}/api/tags`;
-    console.log('[Local Copilot] Fetching models from:', url);
+    console.log('[Maggot] Fetching models from:', url);
     try {
         const data = await httpGetJson(url, 10000);
         const parsed = JSON.parse(data);
         const models = (parsed.models || []).map((m: any) => m.name).sort();
-        console.log('[Local Copilot] Found models:', models);
+        console.log('[Maggot] Found models:', models);
         return models;
     } catch (err: any) {
         throw new Error(`Cannot connect to Ollama at ${endpoint}: ${err.message}`);
@@ -686,12 +686,12 @@ export async function fetchOpenAICompatibleModels(providerId: string): Promise<s
     const cfg = getProviderConfig(providerId);
     const endpoint = cfg.endpoint || 'http://127.0.0.1:1234/v1';
     const url = `${endpoint}/models`;
-    console.log('[Local Copilot] Fetching OpenAI-compatible models from:', url);
+    console.log('[Maggot] Fetching OpenAI-compatible models from:', url);
     try {
         const data = await httpGetJson(url, 10000);
         const parsed = JSON.parse(data);
         const models = (parsed.data || []).map((m: any) => m.id).sort();
-        console.log('[Local Copilot] Found models:', models);
+        console.log('[Maggot] Found models:', models);
         return models;
     } catch (err: any) {
         throw new Error(`Cannot connect to provider at ${endpoint}: ${err.message}`);
@@ -702,7 +702,7 @@ export async function fetchOllamaContextSize(providerId: string, modelName: stri
     const cfg = getProviderConfig(providerId);
     const endpoint = cfg.endpoint || 'http://127.0.0.1:11434';
     const url = `${endpoint}/api/show`;
-    console.log('[Local Copilot] Fetching context size for:', modelName);
+    console.log('[Maggot] Fetching context size for:', modelName);
     try {
         const data = await new Promise<string>((resolve, reject) => {
             const lib = url.startsWith('https:') ? https : http;
@@ -726,7 +726,7 @@ export async function fetchOllamaContextSize(providerId: string, modelName: stri
             }
         }
         const size = ctxLen > 0 ? ctxLen : 0;
-        console.log('[Local Copilot] Context size for', modelName, ':', size);
+        console.log('[Maggot] Context size for', modelName, ':', size);
         return size;
     } catch {
         return 0;

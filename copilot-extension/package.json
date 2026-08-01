@@ -1,7 +1,7 @@
 {
   "name": "local-copilot",
-  "displayName": "Local Copilot",
-  "description": "A Copilot-like chat interface with local command execution capabilities. Access AI models locally via Ollama or remotely via API.",
+  "displayName": "Maggot chat",
+  "description": "Maggot chat — AI coding assistant with local command execution capabilities. Access AI models locally via Ollama or remotely via API.",
   "version": "1.0.0",
   "publisher": "local-dev",
   "engines": {
@@ -21,7 +21,7 @@
       "activitybar": [
         {
           "id": "local-copilot-sidebar",
-          "title": "Local Copilot",
+          "title": "Maggot chat",
           "icon": "$(comment-discussion)"
         }
       ]
@@ -38,27 +38,27 @@
     "commands": [
       {
         "command": "local-copilot.openChat",
-        "title": "Local Copilot: Open Chat"
+        "title": "Maggot chat: Open Chat"
       },
       {
         "command": "local-copilot.runInTerminal",
-        "title": "Local Copilot: Run Selected Command in Terminal"
+        "title": "Maggot chat: Run Selected Command in Terminal"
       },
       {
         "command": "local-copilot.configureOllamaNetwork",
-        "title": "Local Copilot: Configure Ollama for Network Access (bind 0.0.0.0)"
+        "title": "Maggot chat: Configure Ollama for Network Access (bind 0.0.0.0)"
       },
       {
         "command": "local-copilot.toggleThinking",
-        "title": "Local Copilot: Toggle Thinking Display"
+        "title": "Maggot chat: Toggle Thinking Display"
       },
       {
         "command": "local-copilot.openConfigFile",
-        "title": "Local Copilot: Open Config File"
+        "title": "Maggot chat: Open Config File"
       }
     ],
     "configuration": {
-      "title": "Local Copilot",
+      "title": "Maggot chat",
       "properties": {
         "local-copilot.aiProvider": {
           "type": "string",

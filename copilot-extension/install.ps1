@@ -1,4 +1,4 @@
-﻿# Local Copilot VS Code Extension - Installation Script
+﻿# Maggot chat VS Code Extension - Installation Script
 # This script installs the extension by copying it to the VS Code extensions directory
 
 $ErrorActionPreference = "Stop"
@@ -6,7 +6,7 @@ $ErrorActionPreference = "Stop"
 $extensionName = "local-dev.local-copilot"
 $extensionDir = "$env:USERPROFILE\.vscode\extensions\$extensionName"
 
-Write-Host "Installing Local Copilot extension..." -ForegroundColor Green
+Write-Host "Installing Maggot chat extension..." -ForegroundColor Green
 
 # Remove old version if exists
 if (Test-Path $extensionDir) {
@@ -26,12 +26,12 @@ Copy-Item -Path ".\README.md" -Destination "$extensionDir\" -Force -ErrorAction 
 Write-Host ""
 Write-Host "✓ Extension installed successfully!" -ForegroundColor Green
 Write-Host ""
-Write-Host "To use Local Copilot:" -ForegroundColor Yellow
+Write-Host "To use Maggot chat:" -ForegroundColor Yellow
 Write-Host "  1. Press Ctrl+Shift+P to open the command palette"
-Write-Host "  2. Type 'Local Copilot: Open Chat' and press Enter"
-Write-Host "  3. Or click the 'Local Copilot' button in the status bar"
+Write-Host "  2. Type 'Maggot chat: Open Chat' and press Enter"
+Write-Host "  3. Or click the 'Maggot chat' button in the status bar"
 Write-Host ""
-Write-Host "You can also right-click on selected text and choose 'Local Copilot: Run Selected Command in Terminal'" -ForegroundColor Gray
+Write-Host "You can also right-click on selected text and choose 'Maggot chat: Run Selected Command in Terminal'" -ForegroundColor Gray
 Write-Host ""
 Write-Host "Configuration:" -ForegroundColor Yellow
 Write-Host "  - Open VS Code settings (Ctrl+,)"

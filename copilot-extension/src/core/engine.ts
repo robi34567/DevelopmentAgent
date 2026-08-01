@@ -77,7 +77,7 @@ export class AgentEngine {
     }
 
     private emit(event: EngineEvent) {
-        try { this.hooks.emit(event); } catch (e: any) { console.error('[Local Copilot] emit failed:', e.message); }
+        try { this.hooks.emit(event); } catch (e: any) { console.error('[Maggot] emit failed:', e.message); }
     }
 
     private logModelCall(messages: ChatMessage[], round: number) {
@@ -322,7 +322,7 @@ export class AgentEngine {
             this.saveSession();
             return true;
         } catch (err: any) {
-            console.error('[Local Copilot] Compression failed:', err.message);
+            console.error('[Maggot] Compression failed:', err.message);
             this.log(`[COMPRESS] Failed: ${err.message}`);
             if (manual) {
                 this.emit({ type: 'systemMessage', content: `❌ Compression failed: ${err.message}` });
@@ -577,7 +577,7 @@ export class AgentEngine {
     // ── Main agentic loop ────────────────────────────────────────────────────
 
     async sendMessage(text: string, images?: { base64: string; mimeType: string }[]) {
-        console.log('[Local Copilot] handleSendMessage called with:', text.substring(0, 100), images ? `(${images.length} images)` : '');
+        console.log('[Maggot] handleSendMessage called with:', text.substring(0, 100), images ? `(${images.length} images)` : '');
 
         if (text.startsWith('/memorize_global')) {
             await this.memorize(text, true);
@@ -589,7 +589,7 @@ export class AgentEngine {
         }
 
         if (this.isProcessing) {
-            console.log('[Local Copilot] Already processing a message, ignoring');
+            console.log('[Maggot] Already processing a message, ignoring');
             return;
         }
         this.isProcessing = true;

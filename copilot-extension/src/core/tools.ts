@@ -269,7 +269,7 @@ export function executeCommand(command: string, opts?: { cwd?: string; timeoutMs
     return new Promise((resolve) => {
         const cwd = opts?.cwd || process.env.USERPROFILE || process.cwd();
         const timeoutMs = opts?.timeoutMs || 30000;
-        console.log('[Local Copilot] Executing command:', command, 'in', cwd);
+        console.log('[Maggot] Executing command:', command, 'in', cwd);
         exec(command, { cwd, timeout: timeoutMs, maxBuffer: 1024 * 1024 }, (error, stdout, stderr) => {
             const exitCode = error ? Number(error.code) || 1 : 0;
             resolve({ stdout: stdout.trim(), stderr: stderr.trim(), exitCode });

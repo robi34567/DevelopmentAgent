@@ -48,7 +48,7 @@ export class SessionStore {
             const filePath = path.join(this.sessionsDir, `${session.id}.json`);
             fs.writeFileSync(filePath, JSON.stringify(session, null, 2), 'utf-8');
         } catch (e: any) {
-            console.error('[Local Copilot] Failed to save session:', e);
+            console.error('[Maggot] Failed to save session:', e);
         }
     }
 
@@ -59,7 +59,7 @@ export class SessionStore {
             const data = fs.readFileSync(filePath, 'utf-8');
             return JSON.parse(data) as Session;
         } catch (e: any) {
-            console.error('[Local Copilot] Failed to load session:', e);
+            console.error('[Maggot] Failed to load session:', e);
             return null;
         }
     }
@@ -73,7 +73,7 @@ export class SessionStore {
             }
             return false;
         } catch (e: any) {
-            console.error('[Local Copilot] Failed to delete session:', e);
+            console.error('[Maggot] Failed to delete session:', e);
             return false;
         }
     }

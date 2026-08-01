@@ -120,7 +120,7 @@ export class VSCodeLMProvider implements AIProvider {
         this.abortController = new AbortController();
 
         const models = await vscode.lm.selectChatModels();
-        console.log('[Local Copilot] VSCodeLM available models:', models.map(m => ({ id: m.id, name: m.name, family: m.family, vendor: m.vendor })));
+        console.log('[Maggot] VSCodeLM available models:', models.map(m => ({ id: m.id, name: m.name, family: m.family, vendor: m.vendor })));
         if (models.length === 0) {
             throw new Error('No language models available via VS Code LM API. Install a model provider extension (e.g., GitHub Copilot) and sign in.');
         }
@@ -130,7 +130,7 @@ export class VSCodeLMProvider implements AIProvider {
             const found = models.find(m => m.id === this.model || m.name === this.model || m.family === this.model);
             if (found) selectedModel = found;
         }
-        console.log('[Local Copilot] VSCodeLM selected model:', selectedModel.id, selectedModel.name, selectedModel.family, selectedModel.vendor);
+        console.log('[Maggot] VSCodeLM selected model:', selectedModel.id, selectedModel.name, selectedModel.family, selectedModel.vendor);
 
         const hasImages = messages.some(m => m.images && m.images.length > 0);
 
@@ -149,7 +149,7 @@ export class VSCodeLMProvider implements AIProvider {
             } catch (err: any) {
                 if (err instanceof vscode.LanguageModelError) {
                     // VS Code LM API rejected images (any LanguageModelError during image send)
-                    console.log('[Local Copilot] VS Code LM API rejected images, falling back to text-only, code:', err.code, 'message:', err.message);
+                    console.log('[Maggot] VS Code LM API rejected images, falling back to text-only, code:', err.code, 'message:', err.message);
                 } else if (!err.message?.toLowerCase().includes('image')) {
                     throw err;
                 }
@@ -195,7 +195,7 @@ function dataPartToDataUrl(part: vscode.LanguageModelDataPart): string | undefin
 }
 
 export function createAIProvider(type: string, modelOverride?: string): AIProvider {
-    console.log('[Local Copilot] Creating AI provider of type:', type, 'model override:', modelOverride);
+    console.log('[Maggot] Creating AI provider of type:', type, 'model override:', modelOverride);
     const connType = getProviderType(type);
     switch (connType) {
         case 'ollama':

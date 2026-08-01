@@ -120,33 +120,33 @@
     function readClipboardViaNavigator() {
         try {
             navigator.clipboard.read().then(function(items) {
-                console.log('[Local Copilot navigator.clipboard.read] Got', items.length, 'items');
+                console.log('[Maggot navigator.clipboard.read] Got', items.length, 'items');
                 for (var ci = 0; ci < items.length; ci++) {
-                    console.log('[Local Copilot navigator.clipboard.read] Item', ci, 'types:', items[ci].types.join(', '));
+                    console.log('[Maggot navigator.clipboard.read] Item', ci, 'types:', items[ci].types.join(', '));
                     var types = items[ci].types;
                     for (var ti = 0; ti < types.length; ti++) {
                         if (types[ti].startsWith('image/')) {
-                            console.log('[Local Copilot navigator.clipboard.read] Found image type:', types[ti]);
+                            console.log('[Maggot navigator.clipboard.read] Found image type:', types[ti]);
                             items[ci].getType(types[ti]).then(function(blob) {
-                                console.log('[Local Copilot navigator.clipboard.read] Got blob, size:', blob.size, 'type:', blob.type);
+                                console.log('[Maggot navigator.clipboard.read] Got blob, size:', blob.size, 'type:', blob.type);
                                 readClipboardImageBlob(blob);
                                 if (messageInput.value.trim()) {
                                     messageInput.value = '';
                                     messageInput.style.height = 'auto';
                                 }
                             }).catch(function(err) {
-                                console.log('[Local Copilot navigator.clipboard.read] getType error:', err);
+                                console.log('[Maggot navigator.clipboard.read] getType error:', err);
                             });
                             return;
                         }
                     }
                 }
-                console.log('[Local Copilot navigator.clipboard.read] No image found in any item');
+                console.log('[Maggot navigator.clipboard.read] No image found in any item');
             }).catch(function(err) {
-                console.log('[Local Copilot navigator.clipboard.read] read() failed:', err.message || err);
+                console.log('[Maggot navigator.clipboard.read] read() failed:', err.message || err);
             });
         } catch(e) {
-            console.log('[Local Copilot navigator.clipboard.read] Exception:', e.message || e);
+            console.log('[Maggot navigator.clipboard.read] Exception:', e.message || e);
         }
     }
 
@@ -796,7 +796,7 @@
                     if (debugEl) chatContainer.appendChild(debugEl);
                     var welcome = document.createElement('div');
                     welcome.className = 'welcome-message';
-                    welcome.innerHTML = '<h2>Welcome to Local Copilot</h2>' +
+                    welcome.innerHTML = '<h2>Welcome to Maggot chat</h2>' +
                         '<p>Your AI assistant with local command execution capabilities.</p>' +
                         '<div class="features">' +
                         '<div class="feature"><span class="check">&#10003;</span> Chat with AI models (Ollama, LM Studio, JAN AI, OpenAI, Copilot, VS Code LM)</div>' +
@@ -830,7 +830,7 @@
                     } else {
                         var welcome2 = document.createElement('div');
                         welcome2.className = 'welcome-message';
-                        welcome2.innerHTML = '<h2>Welcome to Local Copilot</h2>' +
+                        welcome2.innerHTML = '<h2>Welcome to Maggot chat</h2>' +
                             '<p>Your AI assistant with local command execution capabilities.</p>' +
                             '<div class="features">' +
                             '<div class="feature"><span class="check">&#10003;</span> Chat with AI models (Ollama, LM Studio, JAN AI, OpenAI, Copilot, VS Code LM)</div>' +
@@ -927,11 +927,11 @@
                     hideTypingIndicator();
                     break;
                 case 'clipboardImage':
-                    console.log('[Local Copilot] Received clipboardImage from extension, has base64:', !!message.base64, 'mimeType:', message.mimeType);
+                    console.log('[Maggot] Received clipboardImage from extension, has base64:', !!message.base64, 'mimeType:', message.mimeType);
                     if (message.base64 && message.mimeType) {
                         addPendingImage('data:' + message.mimeType + ';base64,' + message.base64, message.mimeType);
                         if (messageInput.value.trim()) {
-                            console.log('[Local Copilot] Clearing auto-inserted text:', messageInput.value);
+                            console.log('[Maggot] Clearing auto-inserted text:', messageInput.value);
                             messageInput.value = '';
                             messageInput.style.height = 'auto';
                         }

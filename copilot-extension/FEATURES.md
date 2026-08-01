@@ -1,4 +1,4 @@
-# Local Copilot — Features & Usage Guide
+# Maggot chat — Features & Usage Guide
 
 A Copilot-like chat assistant for VS Code with local command execution. Chat with AI models
 (Ollama, LM Studio, JAN AI, OpenAI-compatible endpoints, GitHub Copilot, or the VS Code LM API),
@@ -16,8 +16,8 @@ all from the activity-bar chat panel.
    ```
 2. Copy `out/**` and `package.json` into the installed extension folder
    (`~/.vscode/extensions/local-dev.local-copilot`) and run **Developer: Reload Window**.
-3. Open the **Local Copilot** chat from the activity bar (or Command Palette →
-   `Local Copilot: Open Chat`).
+3. Open the **Maggot chat** chat from the activity bar (or Command Palette →
+   `Maggot chat: Open Chat`).
 4. Make sure your provider is running (e.g. `ollama serve`) and start chatting.
 
 ---
@@ -74,7 +74,7 @@ be deleted. Fields show/hide depending on the selected type.
 `~/.vscode/extensions/local-copilot/config.json` (Windows:
 `C:\Users\<you>\.vscode\extensions\local-copilot\config.json`).
 
-- Use **Command Palette → `Local Copilot: Open Config File`** to edit it directly.
+- Use **Command Palette → `Maggot chat: Open Config File`** to edit it directly.
 - Any provider with a missing `type`/`label` is normalized on load; legacy `vscodeLm` keys are
   migrated automatically.
 
@@ -155,11 +155,11 @@ extension) in a response is turned into a clickable link with an **open** badge:
 
 | Command | What it does |
 |---------|--------------|
-| `Local Copilot: Open Chat` | Open the chat panel |
-| `Local Copilot: Run Selected Command in Terminal` | Run the highlighted text in a terminal |
-| `Local Copilot: Configure Ollama for Network Access (bind 0.0.0.0)` | Helper to let Ollama listen on all interfaces |
-| `Local Copilot: Toggle Thinking Display` | Turn reasoning display on/off |
-| `Local Copilot: Open Config File` | Open `config.json` in the editor |
+| `Maggot chat: Open Chat` | Open the chat panel |
+| `Maggot chat: Run Selected Command in Terminal` | Run the highlighted text in a terminal |
+| `Maggot chat: Configure Ollama for Network Access (bind 0.0.0.0)` | Helper to let Ollama listen on all interfaces |
+| `Maggot chat: Toggle Thinking Display` | Turn reasoning display on/off |
+| `Maggot chat: Open Config File` | Open `config.json` in the editor |
 
 ---
 

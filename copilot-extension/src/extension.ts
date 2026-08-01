@@ -71,23 +71,23 @@ function logToFile(entry: string) {
         const timestamp = new Date().toISOString();
         fs.appendFileSync(file, `\n[${timestamp}] ${entry}\n`, 'utf-8');
     } catch (e) {
-        console.error('[Local Copilot] Log write failed:', e);
+        console.error('[Maggot] Log write failed:', e);
     }
 }
 
 // ── Messaging ─────────────────────────────────────────────────────────────────
 
 function postMessageToAllViews(message: any) {
-    console.log('[Local Copilot] postMessageToAllViews:', message.type, message.text || message.content ? '(has content)' : '');
+    console.log('[Maggot] postMessageToAllViews:', message.type, message.text || message.content ? '(has content)' : '');
     let sent = false;
     if (currentPanel) {
-        try { currentPanel.webview.postMessage(message); sent = true; } catch (e: any) { console.error('[Local Copilot] Panel postMessage failed:', e.message); }
+        try { currentPanel.webview.postMessage(message); sent = true; } catch (e: any) { console.error('[Maggot] Panel postMessage failed:', e.message); }
     }
     if (sidebarView) {
-        try { sidebarView.webview.postMessage(message); sent = true; } catch (e: any) { console.error('[Local Copilot] Sidebar postMessage failed:', e.message); }
+        try { sidebarView.webview.postMessage(message); sent = true; } catch (e: any) { console.error('[Maggot] Sidebar postMessage failed:', e.message); }
     }
     if (!sent) {
-        console.log('[Local Copilot]   -> WARNING: no views to send to!');
+        console.log('[Maggot]   -> WARNING: no views to send to!');
     }
 }
 
@@ -206,7 +206,7 @@ function saveChatState(html: string) {
         workspaceState?.update('chatHtml', html);
         engine.saveSessionHtml(html);
     } catch (e) {
-        console.error('[Local Copilot] Failed to save chat state:', e);
+        console.error('[Maggot] Failed to save chat state:', e);
     }
 }
 
@@ -231,7 +231,7 @@ async function handleExecuteCommand(command: string) {
         const { stdout, stderr, exitCode } = await tools.executeCommand(command, { cwd: getCwd() });
 
         // Also show in terminal for visibility
-        const terminal = vscode.window.activeTerminal || vscode.window.createTerminal('Local Copilot');
+        const terminal = vscode.window.activeTerminal || vscode.window.createTerminal('Maggot chat');
         terminal.show();
         terminal.sendText(command, true);
 
@@ -271,7 +271,7 @@ function handleChangeProvider(provider: string) {
         cfg.aiProvider = provider;
         saveConfig(cfg);
     } catch (e: any) {
-        console.error('[Local Copilot] Failed to save provider to config:', e.message);
+        console.error('[Maggot] Failed to save provider to config:', e.message);
     }
     vscode.workspace.getConfiguration('local-copilot').update('aiProvider', provider, vscode.ConfigurationTarget.Global);
 
@@ -289,7 +289,7 @@ function handleChangeModel(model: string) {
         (cfg.providers as any)[providerType] = prov;
         saveConfig(cfg);
     } catch (e: any) {
-        console.error('[Local Copilot] Failed to save model to config:', e.message);
+        console.error('[Maggot] Failed to save model to config:', e.message);
     }
     const builtinProviders = ['ollama', 'lmstudio', 'janai', 'openai', 'copilot-web', 'vscode-lm'];
     if (builtinProviders.includes(providerType)) {
@@ -307,7 +307,7 @@ function fetchVSCodeLMModels(): Thenable<string[]> {
 }
 
 async function handleFetchModels(providerType?: string) {
-    console.log('[Local Copilot] handleFetchModels called');
+    console.log('[Maggot] handleFetchModels called');
     const activeProvider = providerType || getActiveProvider();
     try {
         const connType = getProviderType(activeProvider);
@@ -319,7 +319,7 @@ async function handleFetchModels(providerType?: string) {
         } else if (connType === 'vscode-lm') {
             models = await fetchVSCodeLMModels();
         }
-        console.log('[Local Copilot] Sending model list to views:', models);
+        console.log('[Maggot] Sending model list to views:', models);
         postMessageToAllViews({
             type: 'modelList',
             models: models,
@@ -330,7 +330,7 @@ async function handleFetchModels(providerType?: string) {
             model: engine.currentModel || ''
         });
     } catch (err: any) {
-        console.error('[Local Copilot] handleFetchModels error:', err.message);
+        console.error('[Maggot] handleFetchModels error:', err.message);
         postMessageToAllViews({
             type: 'modelList',
             models: [],
@@ -366,7 +366,7 @@ function handleSaveConfig(config: any) {
         try {
             engine.setProvider(createAIProvider(provType, engine.currentModel || undefined));
         } catch (e: any) {
-            console.error('[Local Copilot] Failed to re-create provider after config save:', e.message);
+            console.error('[Maggot] Failed to re-create provider after config save:', e.message);
         }
         postMessageToAllViews({ type: 'configSaved', config: saved, configPath: getConfigPath() });
         logToFile(`[CONFIG] Config saved to ${getConfigPath()}`);
@@ -544,7 +544,7 @@ async function handleWebviewMessage(message: any, send: (msg: any) => void) {
                 break;
         }
     } catch (err: any) {
-        console.error('[Local Copilot] message handler error:', err);
+        console.error('[Maggot] message handler error:', err);
         postMessageToAllViews({ type: 'error', text: err.message || 'Internal error' });
     }
 }
@@ -581,7 +581,7 @@ class SidebarProvider implements vscode.WebviewViewProvider {
         this._disposables.push(
             webviewView.webview.onDidReceiveMessage(
                 async (message) => {
-                    console.log('[Local Copilot] Sidebar received message:', message.type);
+                    console.log('[Maggot] Sidebar received message:', message.type);
                     await handleWebviewMessage(message, (msg) => webviewView.webview.postMessage(msg));
                 }
             )
@@ -600,7 +600,7 @@ class SidebarProvider implements vscode.WebviewViewProvider {
 // ── Activation ────────────────────────────────────────────────────────────────
 
 export function activate(context: vscode.ExtensionContext) {
-    console.log('Local Copilot extension is now active!');
+    console.log('Maggot chat extension is now active!');
     workspaceState = context.workspaceState;
     showThinking = workspaceState?.get<boolean>('showThinking', true) ?? true;
 
@@ -695,9 +695,9 @@ export function activate(context: vscode.ExtensionContext) {
     context.subscriptions.push(openConfigCommand);
 
     const statusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);
-    statusBarItem.text = "$(comment-discussion) Local Copilot";
+    statusBarItem.text = "$(comment-discussion) Maggot chat";
     statusBarItem.command = 'local-copilot.openChat';
-    statusBarItem.tooltip = 'Open Local Copilot Chat';
+    statusBarItem.tooltip = 'Open Maggot chat';
     statusBarItem.show();
     context.subscriptions.push(statusBarItem);
 }
@@ -710,7 +710,7 @@ function createOrShowChatPanel(context: vscode.ExtensionContext) {
 
     currentPanel = vscode.window.createWebviewPanel(
         'localCopilotChat',
-        'Local Copilot',
+        'Maggot chat',
         vscode.ViewColumn.One,
         {
             enableScripts: true,
@@ -733,7 +733,7 @@ function createOrShowChatPanel(context: vscode.ExtensionContext) {
 
     currentPanel.webview.onDidReceiveMessage(
         async (message) => {
-            console.log('[Local Copilot] Panel received message:', message.type);
+            console.log('[Maggot] Panel received message:', message.type);
             await handleWebviewMessage(message, (msg) => currentPanel?.webview.postMessage(msg));
         },
         undefined,
@@ -764,7 +764,7 @@ function runSelectedInTerminal() {
         return;
     }
 
-    const terminal = vscode.window.activeTerminal || vscode.window.createTerminal('Local Copilot');
+    const terminal = vscode.window.activeTerminal || vscode.window.createTerminal('Maggot chat');
     terminal.show();
     terminal.sendText(text, true);
 }

@@ -1,4 +1,4 @@
-# Local Copilot - VS Code Extension
+# Maggot chat - VS Code Extension
 
 A Copilot-like chat interface with local command execution capabilities. Access AI models locally via Ollama or remotely via OpenAI/GitHub Copilot APIs.
 
@@ -13,7 +13,7 @@ A Copilot-like chat interface with local command execution capabilities. Access 
 ## Quick Start
 
 1. Install the extension
-2. Press `Ctrl+Shift+P` → `Local Copilot: Open Chat`
+2. Press `Ctrl+Shift+P` → `Maggot chat: Open Chat`
 3. Start chatting!
 
 ## Configuration
@@ -43,8 +43,8 @@ The AI can suggest commands using `[CMD]command[/CMD]` markers. You can:
 
 ## Commands
 
-- `Local Copilot: Open Chat` - Opens the chat panel
-- `Local Copilot: Run Selected Command in Terminal` - Runs selected text as a command
+- `Maggot chat: Open Chat` - Opens the chat panel
+- `Maggot chat: Run Selected Command in Terminal` - Runs selected text as a command
 
 ## Requirements
 

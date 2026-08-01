@@ -8,7 +8,7 @@ export function getWebviewContent(extensionUri: vscode.Uri, webview: vscode.Webv
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src ${webview.cspSource} data:; style-src ${webview.cspSource} 'unsafe-inline'; script-src ${webview.cspSource};">
-    <title>Local Copilot</title>
+    <title>Maggot chat</title>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body { 
@@ -711,7 +711,7 @@ export function getWebviewContent(extensionUri: vscode.Uri, webview: vscode.Webv
 </head>
 <body>
     <div id="header">
-        <h1><span class="icon">🤖</span> Local Copilot</h1>
+        <h1><span class="icon">🤖</span> Maggot chat</h1>
         <div id="header-controls">
             <select id="provider-select">
                 <option value="">Loading...</option>
@@ -771,7 +771,7 @@ export function getWebviewContent(extensionUri: vscode.Uri, webview: vscode.Webv
     <div id="chat-container">
         <div id="debug-status" style="text-align:center;padding:4px;font-size:10px;color:var(--vscode-descriptionForeground);border-bottom:1px solid var(--vscode-panel-border);">Initializing script...</div>
         <div class="welcome-message">
-            <h2>Welcome to Local Copilot</h2>
+            <h2>Welcome to Maggot chat</h2>
             <p>Your AI assistant with local command execution capabilities.</p>
             <div class="features">
                 <div class="feature"><span class="check">&#10003;</span> Chat with AI models (Ollama, LM Studio, JAN AI, OpenAI, Copilot, VS Code LM)</div>
