@@ -159,8 +159,10 @@ Unchanged: `COMPRESSION_THRESHOLD_CHARS` (30,000), `compressChatHistory()` in co
 
 ### Maggot CLI
 
-- Node `readline` REPL. No webview; renders `assistantDelta` to stdout, prompts for approvals/choices/asks, uses `envHooks` for links/files.
-- Uses pure providers + `core/config.ts` (no VS Code settings fallback).
+- Node `readline` REPL (`src/cli.ts`, `npm run cli`). No webview; renders `assistantDelta` to stdout, prompts for approvals/choices/asks, uses `process.cwd()` as the workspace root.
+- Uses pure providers + `core/config.ts` (no VS Code settings fallback). Redirects engine `console.*` debug output to `logs/cli-*.log` so stdout stays clean for the REPL.
+- `/provider` persists the new `aiProvider` to the shared `config.json` (same behavior as the VS Code UI), so `changeModel` resolves the provider from the active config.
+- VS Code-only providers (`copilot-web`, `vscode-lm`) are rejected with a hint to switch provider.
 
 ### Maggot webUI
 
@@ -184,6 +186,7 @@ copilot-extension/
       session.ts                 # SessionStore, memory/compression
     config.ts                    # VS Code adapter over core/config.ts
     aiProvider.ts                # VS Code adapter: VSCodeLM + Copilot providers
+    cli.ts                       # Maggot CLI REPL (readline on the engine, no vscode)
     extension.ts                 # Maggot chat host (engine + webview wiring)
     webview.ts                   # HTML/CSS template
     main.js                      # shared frontend JS (webview / web transport shim)
@@ -212,7 +215,7 @@ CLI and webUI live in sibling packages that `tsc` the `core/` sources directly.
 1. **Core foundation (this commit):** extract `core/types.ts`, `core/config.ts`, `core/providers.ts`; `src/config.ts` and `src/aiProvider.ts` become thin adapters. Behavior identical, extension still compiles and runs.
 2. **Agent engine:** move the agentic loop, tool executors, session store, memory, and approval logic into `core/engine.ts` / `core/tools.ts` / `core/session.ts`; `extension.ts` drives the engine.
 3. **Maggot chat rename:** update `package.json`, webview copy, log prefixes.
-4. **Maggot CLI:** `readline` REPL on the engine.
+4. **Maggot CLI (done):** `readline` REPL on the engine (`src/cli.ts`, `npm run cli`).
 5. **Maggot webUI:** Node server + WebSocket + transport shim + token auth.
 6. **Docs:** update FEATURES.md and this file as each step lands.
 

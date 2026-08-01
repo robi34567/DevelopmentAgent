@@ -173,6 +173,50 @@ extension) in a response is turned into a clickable link with an **open** badge:
 
 ---
 
+## Maggot CLI
+
+A terminal REPL that runs the **same** Maggot Agent Engine (`src/core/`) as the VS Code chat,
+sharing the same config file and session store. It has no VS Code dependency — only pure Node.
+
+Start it from the repo (after `npm run compile`):
+
+```
+npm run cli                 # REPL in the current directory
+node out/cli.js <dir>       # REPL rooted at <dir> (default: current dir)
+```
+
+The VS Code-only providers (`copilot-web`, `vscode-lm`) are rejected in the CLI with a hint to
+switch provider. Everything else is identical: streaming, tool execution, approvals, choices,
+sessions, memory, and compression.
+
+Slash commands:
+
+| Command | Effect |
+|---------|--------|
+| `/help` | Show command help |
+| `/new` | Start a new session |
+| `/sessions` | List saved sessions (shared with VS Code) |
+| `/load <id>` | Load a session |
+| `/delete <id>` | Delete a session |
+| `/models` | List models for the active provider |
+| `/model <name>` | Switch model |
+| `/providers` | List providers |
+| `/provider <id>` | Switch provider (persists to config) |
+| `/approval <safe\|all>` | Set approval mode |
+| `/memorize` | Save session memory |
+| `/memorize_global` | Save global memory |
+| `/compress` | Compress chat history now |
+| `/thinking` | Toggle thinking display |
+| `/clear` | Clear current chat |
+| `/stop` | Stop generation |
+| `/config` | Show config/data/log paths |
+| `/quit` | Exit (or Ctrl+D) |
+
+Anything that isn't a slash command is sent to the AI as a message. Approval prompts
+(`Allow this command? [y/N]`) and choice questions are answered inline.
+
+---
+
 ## Storage Locations (Windows)
 
 | Item | Path |
