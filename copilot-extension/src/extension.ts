@@ -582,6 +582,13 @@ class SidebarProvider implements vscode.WebviewViewProvider {
                             case 'saveConfig':
                                 handleSaveConfig(message.config);
                                 break;
+                            case 'openLink':
+                                vscode.env.openExternal(vscode.Uri.parse(message.url))
+                                    .then(() => {}, (err: any) => vscode.window.showErrorMessage(`Failed to open link: ${err.message}`));
+                                break;
+                            case 'openFile':
+                                handleOpenFile(message.path);
+                                break;
                             case 'approvalResponse':
                                 handleApprovalResponse(message.id, message.approved);
                                 break;
@@ -843,6 +850,13 @@ function createOrShowChatPanel(context: vscode.ExtensionContext) {
                     case 'saveConfig':
                         handleSaveConfig(message.config);
                         break;
+                    case 'openLink':
+                        vscode.env.openExternal(vscode.Uri.parse(message.url))
+                            .then(() => {}, (err: any) => vscode.window.showErrorMessage(`Failed to open link: ${err.message}`));
+                        break;
+                    case 'openFile':
+                        handleOpenFile(message.path);
+                        break;
                     case 'approvalResponse':
                         handleApprovalResponse(message.id, message.approved);
                         break;
@@ -1100,6 +1114,15 @@ function extractFilesBlocks(text: string): string[] {
         if (g) globs.push(g);
     }
     return globs;
+}
+
+function isImageUnsupportedText(content: string): boolean {
+    const lower = content.toLowerCase();
+    if (!lower.includes('image')) return false;
+    if (lower.includes('does not support') || lower.includes('not support') || lower.includes('no support')) return true;
+    if (lower.includes('unsupported')) return true;
+    if (lower.includes('cannot read') || lower.includes("can't read") || lower.includes('can not read')) return true;
+    return false;
 }
 
 async function handleReadFile(filePath: string): Promise<string> {
@@ -1718,33 +1741,24 @@ async function handleSendMessage(text: string, images?: { base64: string; mimeTy
             responseStats = result.stats;
             const finalThinking = result.thinking;
 
+            // The model sometimes replies with its own "cannot read image" error (e.g. it invents a
+            // filename like image.png) even when no image was attached. Show one clean message instead
+            // of the raw, possibly-redundant error text.
+            if (isImageUnsupportedText(fullResponse)) {
+                fullResponse = '⚠️ The model could not process the image you referenced — it does not support image input. Please describe the image in text, or switch to a vision-capable model.';
+            }
+
             logModelResponse(fullResponse, responseStats);
 
             // Add assistant response to history
             chatHistory.push({ role: 'assistant', content: fullResponse });
 
-            // Check for [ASK] blocks — model wants to ask a question
+            // Check for [ASK] and [CHOICES] blocks — model wants to ask a question and/or offer options.
+            // These often appear together (e.g. "[ASK]...[/ASK]\n[CHOICES]a|b|c[/CHOICES]"), so process
+            // BOTH: show the question AND send the choiceRequest so the client renders clickable buttons.
             const questions = extractAskBlocks(fullResponse);
-            if (questions.length > 0) {
-                postMessageToAllViews({
-                    type: 'finalizeAssistantMessage',
-                    content: fullResponse,
-                    stats: responseStats,
-                    model: currentModel,
-                    contextSize: currentContextSize,
-                    thinking: finalThinking
-                });
-                postMessageToAllViews({
-                    type: 'addMessage',
-                    role: 'system',
-                    content: `✋ The model is asking:\n\n${questions.join('\n\n')}\n\nType your answer and press Send to continue.`
-                });
-                break;
-            }
-
-            // Check for [CHOICES] block — model offers options
             const choices = extractChoicesBlock(fullResponse);
-            if (choices && choices.length > 0) {
+            if (questions.length > 0 || (choices && choices.length > 0)) {
                 postMessageToAllViews({
                     type: 'finalizeAssistantMessage',
                     content: fullResponse,
@@ -1753,11 +1767,20 @@ async function handleSendMessage(text: string, images?: { base64: string; mimeTy
                     contextSize: currentContextSize,
                     thinking: finalThinking
                 });
-                postMessageToAllViews({
-                    type: 'choiceRequest',
-                    id: 'choice-' + (++approvalIdCounter),
-                    choices: choices
-                });
+                if (questions.length > 0) {
+                    postMessageToAllViews({
+                        type: 'addMessage',
+                        role: 'system',
+                        content: `✋ The model is asking:\n\n${questions.join('\n\n')}\n\nType your answer and press Send to continue.`
+                    });
+                }
+                if (choices && choices.length > 0) {
+                    postMessageToAllViews({
+                        type: 'choiceRequest',
+                        id: 'choice-' + (++approvalIdCounter),
+                        choices: choices
+                    });
+                }
                 break;
             }
 
@@ -1814,18 +1837,21 @@ async function handleSendMessage(text: string, images?: { base64: string; mimeTy
                 postMessageToAllViews({ type: 'addCommandOutput', output: `$ ${command}\n${stdout || stderr || '(no output)'}`, success: exitCode === 0 });
             }
 
-            for (const filePath of reads) {
-                if (!isStreaming) break;
-                postMessageToAllViews({ type: 'addMessage', role: 'system', content: `📖 Reading: ${filePath}` });
-                const result = await handleReadFile(filePath);
-                outputMessage += `Read: ${filePath}\nResult:\n${result}\n\n`;
-            }
-
+            // Execute writes BEFORE reads: the model often writes a file then reads it back to
+            // verify. Reading first would return stale/absent content, which makes the model
+            // distrust the result and repeat the same tool calls over and over.
             for (const w of writes) {
                 if (!isStreaming) break;
                 postMessageToAllViews({ type: 'addMessage', role: 'system', content: `📝 Writing: ${w.path}` });
                 const result = await handleWriteFile(w.path, w.content);
                 outputMessage += `Write: ${w.path}\nResult:\n${result}\n\n`;
+            }
+
+            for (const filePath of reads) {
+                if (!isStreaming) break;
+                postMessageToAllViews({ type: 'addMessage', role: 'system', content: `📖 Reading: ${filePath}` });
+                const result = await handleReadFile(filePath);
+                outputMessage += `Read: ${filePath}\nResult:\n${result}\n\n`;
             }
 
             for (const pattern of searches) {
@@ -1992,6 +2018,28 @@ function handleChangeModel(model: string) {
         role: 'system',
         content: `Switched to model: ${model}`
     });
+}
+
+async function handleOpenFile(filePath: string) {
+    try {
+        if (!filePath) return;
+        let uri: vscode.Uri;
+        if (/^file:\/\//i.test(filePath)) {
+            uri = vscode.Uri.parse(filePath);
+        } else if (path.isAbsolute(filePath)) {
+            uri = vscode.Uri.file(filePath);
+        } else {
+            const workspaceFolders = vscode.workspace.workspaceFolders;
+            const base = workspaceFolders && workspaceFolders.length > 0 ? workspaceFolders[0].uri.fsPath : '';
+            uri = vscode.Uri.file(path.join(base, filePath));
+        }
+        const doc = await vscode.workspace.openTextDocument(uri);
+        await vscode.window.showTextDocument(doc);
+        logToFile(`[OPEN] Opened file: ${uri.fsPath}`);
+    } catch (err: any) {
+        logToFile(`[OPEN] Failed to open file ${filePath}: ${err.message}`);
+        vscode.window.showErrorMessage(`Failed to open file: ${err.message}`);
+    }
 }
 
 function handleSaveConfig(config: any) {

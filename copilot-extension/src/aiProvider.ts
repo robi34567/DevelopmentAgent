@@ -3,6 +3,8 @@ import * as https from 'https';
 import * as http from 'http';
 import { getProviderConfig, getProviderType } from './config';
 
+const IMAGE_STRIPPED_NOTE = '[Note: The user attached image(s) to a previous message, but the image(s) were NOT sent to you because this model does not support image input. The user has already been informed. Do NOT say you cannot read/view/see images, do NOT output any error about images, and do NOT mention this note. If the image was essential to answer, ask the user to describe it in text or paste the relevant content. Otherwise continue normally.]';
+
 export interface ChatMessageImage {
     base64: string;
     mimeType: string;
@@ -374,7 +376,7 @@ export class OllamaProvider implements AIProvider {
         const ollamaMessages = messages.map(msg => {
             const m: any = { role: msg.role, content: msg.content };
             if (msg.images && msg.images.length > 0 && hasImages) {
-                // Strip images for non-vision model
+                m.content = (msg.content ? msg.content + '\n\n' : '') + IMAGE_STRIPPED_NOTE;
             }
             return m;
         });
@@ -419,8 +421,13 @@ export class OllamaProvider implements AIProvider {
 
         const result = await readStream(response.body, onChunk, onThinking);
         const prefix = hasImages ? '⚠️ The model does not support image input. Only text was sent.\n\n' : '';
+        // If the model still replies with an image-unsupported error, drop it — the prefix already says this once
+        let finalContent = result.content;
+        if (hasImages && this.isImageError(finalContent)) {
+            finalContent = '';
+        }
         console.log('[Local Copilot] Stream completed, total chars:', result.content.length, 'stats:', result.stats, 'thinking:', result.thinking ? result.thinking.length + ' chars' : 'none');
-        return { content: prefix + result.content, stats: result.stats, thinking: result.thinking };
+        return { content: prefix + finalContent, stats: result.stats, thinking: result.thinking };
     }
 
     abort(): void {
@@ -726,10 +733,17 @@ export class VSCodeLMProvider implements AIProvider {
 
         // Retry without images
         const lmTextOnly = this.buildLMmsg(messages, true);
+        if (hasImages) {
+            lmTextOnly.push(vscode.LanguageModelChatMessage.User(IMAGE_STRIPPED_NOTE));
+        }
         try {
             const content = await this.doStream(selectedModel, lmTextOnly, onChunk);
             const prefix = hasImages ? '⚠️ The model does not support image input. Only text was sent.\n\n' : '';
-            return { content: prefix + content };
+            let finalContent = content;
+            if (hasImages && this.isImageError(finalContent)) {
+                finalContent = '';
+            }
+            return { content: prefix + finalContent };
         } catch (err: any) {
             if (err.message?.includes('cancel')) throw err;
             throw new Error(`VS Code LM API error: ${err.message}`);

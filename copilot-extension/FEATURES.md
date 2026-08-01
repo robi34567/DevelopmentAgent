@@ -141,6 +141,14 @@ the model produces a final answer.
 > The model is instructed never to add its own "Custom"/"Other" choice option, because the
 > `Custom...` button is always appended automatically.
 
+### Clickable links
+
+Any web link (`https://…`) or file path (absolute, workspace-relative, or with a known file
+extension) in a response is turned into a clickable link with an **open** badge:
+
+- **Web link** → opens in your default browser.
+- **File path** → opens the file in VS Code (relative paths are resolved against the workspace root).
+
 ---
 
 ## Commands (Command Palette)

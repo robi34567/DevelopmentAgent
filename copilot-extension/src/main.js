@@ -409,6 +409,44 @@
             .replace(/'/g, '&#039;');
     }
 
+    function attrEncode(str) {
+        return String(str)
+            .replace(/&/g, '&amp;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&#39;');
+    }
+
+    var LINK_WEB_RE = /(?<![\w"=/'\\:.])(https?:\/\/[^\s<>"']+)/g;
+    var LINK_FILE_RE = /(?<![\w"=/'\\:.])(?:[A-Za-z]:)?[\\/]?[\w.~-]+(?:[\\/][\w.~-]+)*\.(?:tsx?|mjs|cjs|jsx?|pyw?|jsonc?|md|markdown|txt|html?|css|scss|less|vue|svelte|cpp?|hpp?|cc|c|h|go|rs|rb|php|java|kt|kts|swift|sh|bash|ps1|psm1|bat|cmd|ya?ml|toml|ini|cfg|conf|xml|svg|png|jpe?g|gif|webp|ico|map|sql|lock|env|log|csv|tsv|sqlite|db|d\.ts|ttf|woff2?)(?![\\/\w])/g;
+
+    function addLinksToText(text) {
+        var out = '';
+        var lastIndex = 0;
+        text.replace(LINK_WEB_RE, function(match, url, offset) {
+            var clean = url.replace(/[.,;:!?]+$/, '').replace(/[)\]}]+$/, '');
+            out += text.substring(lastIndex, offset);
+            out += '<a class="ll web" href="#" data-url="' + attrEncode(clean) + '" title="Open in browser">' +
+                '<span class="ll-text">' + clean + '</span><span class="ll-badge">open &#8599;</span></a>';
+            lastIndex = offset + url.length;
+            return match;
+        });
+        out += text.substring(lastIndex);
+        out = out.replace(LINK_FILE_RE, function(match) {
+            return '<a class="ll file" href="#" data-path="' + attrEncode(match) + '" title="Open in VS Code">' +
+                '<span class="ll-text">' + match + '</span><span class="ll-badge">open</span></a>';
+        });
+        return out;
+    }
+
+    function addContentLinks(escaped) {
+        return escaped.split(/(<[^>]*>)/).map(function(part) {
+            if (part.length > 0 && part.charAt(0) === '<' && part.charAt(part.length - 1) === '>') {
+                return part;
+            }
+            return addLinksToText(part);
+        }).join('');
+    }
+
     function parseContent(content) {
         var escaped = escapeHtml(content);
         escaped = escaped.replace(/!\[image\]\(data:(image\/[^;]+);base64,([^)]+)\)/g, function(m, mime, b64) {
@@ -460,16 +498,27 @@
                 escapedError +
                 '</div>';
         });
+        escaped = addContentLinks(escaped);
         escaped = escaped.replace(/\n/g, '<br>');
         return escaped;
     }
 
     chatContainer.addEventListener('click', function(e) {
         var btn = e.target.closest('.run-btn');
-        if (!btn || btn.disabled) return;
-        btn.disabled = true;
-        btn.textContent = 'Running...';
-        vscode.postMessage({ type: 'executeCommand', command: btn.dataset.cmd });
+        if (btn && !btn.disabled) {
+            btn.disabled = true;
+            btn.textContent = 'Running...';
+            vscode.postMessage({ type: 'executeCommand', command: btn.dataset.cmd });
+            return;
+        }
+        var linkEl = e.target.closest('.ll');
+        if (!linkEl) return;
+        e.preventDefault();
+        if (linkEl.classList.contains('web')) {
+            vscode.postMessage({ type: 'openLink', url: linkEl.dataset.url });
+        } else if (linkEl.classList.contains('file')) {
+            vscode.postMessage({ type: 'openFile', path: linkEl.dataset.path });
+        }
     });
 
     function showTypingIndicator() {
@@ -838,16 +887,16 @@
                     choicesDiv.querySelectorAll('.choice-btn').forEach(function(btn) {
                         btn.addEventListener('click', function() {
                             disableAllChoiceButtons();
-                            var editor = document.getElementById('custom-choice-editor');
+                            var editor = choicesDiv.querySelector('#custom-choice-editor');
                             if (editor) { editor.style.display = 'none'; }
                             btn.textContent = '✓ ' + btn.textContent;
                             vscode.postMessage({ type: 'choiceResponse', choice: btn.dataset.choice });
                         });
                     });
-                    var openBtn = document.getElementById('custom-choice-open');
-                    var editor = document.getElementById('custom-choice-editor');
-                    var inputEl = document.getElementById('custom-choice-input');
-                    var submitEl = document.getElementById('custom-choice-submit');
+                    var openBtn = choicesDiv.querySelector('#custom-choice-open');
+                    var editor = choicesDiv.querySelector('#custom-choice-editor');
+                    var inputEl = choicesDiv.querySelector('#custom-choice-input');
+                    var submitEl = choicesDiv.querySelector('#custom-choice-submit');
                     openBtn.addEventListener('click', function() {
                         disableAllChoiceButtons();
                         openBtn.disabled = true;

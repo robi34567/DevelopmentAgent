@@ -675,6 +675,38 @@ export function getWebviewContent(extensionUri: vscode.Uri, webview: vscode.Webv
             font-size: 10px;
             color: var(--vscode-descriptionForeground);
         }
+        .ll {
+            display: inline-flex;
+            align-items: center;
+            gap: 5px;
+            vertical-align: baseline;
+            text-decoration: none;
+            color: var(--vscode-textLink-foreground);
+            cursor: pointer;
+            border-radius: 4px;
+            padding: 1px 3px;
+            margin: 1px 0;
+            max-width: 100%;
+            line-height: 1.35;
+        }
+        .ll .ll-text {
+            word-break: break-all;
+        }
+        .ll:hover {
+            background: var(--vscode-list-hoverBackground);
+            text-decoration: underline;
+        }
+        .ll .ll-badge {
+            flex-shrink: 0;
+            font-size: 9px;
+            line-height: 1;
+            border: 1px solid var(--vscode-textLink-foreground);
+            border-radius: 3px;
+            padding: 1px 4px;
+            text-transform: uppercase;
+            letter-spacing: 0.4px;
+            opacity: 0.85;
+        }
     </style>
 </head>
 <body>
