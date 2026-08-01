@@ -1,4 +1,4 @@
-# Local Copilot VS Code Extension - Installation Script
+﻿# Local Copilot VS Code Extension - Installation Script
 # This script installs the extension by copying it to the VS Code extensions directory
 
 $ErrorActionPreference = "Stop"
@@ -17,9 +17,9 @@ if (Test-Path $extensionDir) {
 # Create extension directory
 New-Item -ItemType Directory -Path $extensionDir -Force | Out-Null
 
-# Copy compiled output
+# Copy compiled output (copy the whole out dir to preserve subfolders like core/)
 Write-Host "Copying extension files..." -ForegroundColor Cyan
-Copy-Item -Path ".\out\*" -Destination "$extensionDir\out\" -Recurse -Force
+Copy-Item -Path ".\out" -Destination "$extensionDir\" -Recurse -Force
 Copy-Item -Path ".\package.json" -Destination "$extensionDir\" -Force
 Copy-Item -Path ".\README.md" -Destination "$extensionDir\" -Force -ErrorAction SilentlyContinue
 
