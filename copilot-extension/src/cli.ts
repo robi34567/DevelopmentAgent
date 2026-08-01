@@ -52,6 +52,19 @@ const c = {
 };
 function out(text = '') { process.stdout.write(text + '\n'); }
 
+const TOOL_TAG_RE = /\[(CMD|READ|WRITE|SEARCH|FILES|OUTPUT|ERROR|ASK|CHOICES)\][\s\S]*?\[\/\1\]/g;
+function cleanContent(text: string): string {
+    let prev = '';
+    while (prev !== text) {
+        prev = text;
+        text = text.replace(TOOL_TAG_RE, '');
+    }
+    const open = text.match(/\[(CMD|READ|WRITE|SEARCH|FILES|OUTPUT|ERROR|ASK|CHOICES)/);
+    if (open && open.index !== undefined) return text.substring(0, open.index);
+    if (text.endsWith('[')) return text.substring(0, text.length - 1);
+    return text;
+}
+
 // ── REPL state ────────────────────────────────────────────────────────────────
 const rl = readline.createInterface(process.stdin as any, process.stdout as any);
 
@@ -64,6 +77,7 @@ let streamLen = 0;
 let thinkLen = 0;
 let thinkingActive = false;
 let contentStarted = false;
+let sessionListRequested = false;
 
 function ask(prompt: string): Promise<string> {
     process.stdout.write(prompt);
@@ -136,7 +150,8 @@ function onEvent(evt: EngineEvent) {
             contentStarted = false;
             break;
         case 'assistantDelta': {
-            const delta = evt.content.substring(streamLen);
+            const clean = cleanContent(evt.content);
+            const delta = clean.substring(streamLen);
             if (delta) {
                 if (thinkingActive) {
                     process.stderr.write('\n\n');
@@ -145,7 +160,7 @@ function onEvent(evt: EngineEvent) {
                 contentStarted = true;
                 process.stdout.write(delta);
             }
-            streamLen = evt.content.length;
+            streamLen = clean.length;
             break;
         }
         case 'updateThinking': {
@@ -183,12 +198,12 @@ function onEvent(evt: EngineEvent) {
             pendingChoices = evt.choices;
             break;
         case 'commandOutput':
-            out(c.dim('┌─ ' + evt.output.split('\n').join('\n│  ') + (evt.success ? '' : c.red(' (exit != 0)'))));
-            out(c.dim('└─'));
+            if (evt.output) {
+                out(c.dim('┌─ ' + evt.output.split('\n').join('\n│  ') + (evt.success ? '' : c.red(' (exit != 0)'))));
+                out(c.dim('└─'));
+            }
             break;
         case 'executingCommand':
-            out();
-            out(c.cyan('⚡ $ ' + evt.command));
             break;
         case 'error':
             out();
@@ -216,6 +231,8 @@ function onEvent(evt: EngineEvent) {
             out(c.dim(`[session] loaded: ${evt.sessionId} (${evt.sessionName}) · ${evt.chatHistory.length} messages`));
             break;
         case 'sessionList': {
+            if (!sessionListRequested) break;
+            sessionListRequested = false;
             out();
             out(c.bold('sessions:'));
             for (const s of evt.sessions) {
@@ -321,6 +338,7 @@ async function handleCommand(line: string): Promise<boolean> {
             engine.newSession();
             break;
         case 'sessions':
+            sessionListRequested = true;
             engine.refreshSessionList();
             break;
         case 'load':

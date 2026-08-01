@@ -14,7 +14,7 @@ export type EngineEvent =
     | { type: 'finalize'; content: string; stats?: ResponseStats; thinking?: string; model: string; contextSize: number }
     | { type: 'systemMessage'; content: string }
     | { type: 'choices'; id: string; choices: string[] }
-    | { type: 'commandOutput'; output: string; success: boolean }
+    | { type: 'commandOutput'; command: string; output: string; success: boolean }
     | { type: 'executingCommand'; command: string }
     | { type: 'startAssistant' }
     | { type: 'error'; text: string }
@@ -733,7 +733,7 @@ export class AgentEngine {
                     const allowed = await this.shouldExecuteCommand(command);
                     if (!allowed) {
                         outputMessage += `Command: ${command}\nResult:\n[OUTPUT](denied by user)[/OUTPUT]\n\n`;
-                        this.emit({ type: 'commandOutput', output: `$ ${command}\n(denied by user)`, success: false });
+                        this.emit({ type: 'commandOutput', command, output: '(denied by user)', success: false });
                         continue;
                     }
                     this.emit({ type: 'executingCommand', command });
@@ -744,7 +744,7 @@ export class AgentEngine {
                     if (stderr) outputBlock += `[ERROR]${stderr}[/ERROR]`;
                     outputBlock ||= exitCode === 0 ? '[OUTPUT](no output)[/OUTPUT]' : `[ERROR]Exit code: ${exitCode}[/ERROR]`;
                     outputMessage += `Command: ${command}\nResult:\n${outputBlock}\n\n`;
-                    this.emit({ type: 'commandOutput', output: `$ ${command}\n${stdout || stderr || '(no output)'}`, success: exitCode === 0 });
+                    this.emit({ type: 'commandOutput', command, output: stdout || stderr || '(no output)', success: exitCode === 0 });
                 }
 
                 // Execute writes BEFORE reads: the model often writes a file then reads it back to
