@@ -98,6 +98,32 @@ Search `local-copilot` in Settings (`Ctrl+,`): `aiProvider`, `ollamaEndpoint`/`o
 - **Auto-compression** — long histories are summarized automatically; use **Compress** to force it.
 - **Clear chat** — resets the current conversation.
 
+### Agents
+
+GitHub-Copilot-style agent definitions live in `.github/agents/<id>.md` in the workspace (each
+frontend uses its own workspace root — see per-frontend docs below). An agent is a Markdown file
+with YAML frontmatter:
+
+```markdown
+---
+name: Reviewer
+description: Reviews code for bugs
+---
+
+Focus on correctness. Check for off-by-one errors and race conditions.
+```
+
+- Select an agent from the **agent dropdown** (or **No agent** for none). The agent's
+  **description + body** are injected into the system prompt before every model call.
+- The selection is stored in `config.json` (`selectedAgent`) and restored across all frontends.
+- **VS Code:** `Maggot chat: New Agent` command (or **Save agent** in the config modal) creates a
+  new agent file and activates it; agent blocks in the config modal edit/delete them.
+- **CLI:** `/agent <id>` to select, `/agent none` to clear, `/agent new <name> [desc]` to create,
+  `/agent delete <id>` to delete, `/agent` to show the current one, `/agents` to list.
+- Agent files are stored at `<workspace>\.github\agents\`. The workspace root is the opened
+  folder for VS Code, the `<dir>` argument for the CLI, and the configured workspace for the
+  webUI.
+
 ### Sessions
 
 - **+ New** creates a session, **Save** persists it, the dropdown loads saved sessions,
@@ -159,6 +185,7 @@ extension) in a response is turned into a clickable link with an **open** badge:
 | `Maggot chat: Run Selected Command in Terminal` | Run the highlighted text in a terminal |
 | `Maggot chat: Configure Ollama for Network Access (bind 0.0.0.0)` | Helper to let Ollama listen on all interfaces |
 | `Maggot chat: Toggle Thinking Display` | Turn reasoning display on/off |
+| `Maggot chat: New Agent` | Create a new agent (asks name + description) and activate it |
 | `Maggot chat: Open Config File` | Open `config.json` in the editor |
 
 ---
@@ -207,6 +234,12 @@ Slash commands:
 | `/memorize_global` | Save global memory |
 | `/compress` | Compress chat history now |
 | `/thinking` | Toggle thinking display |
+| `/agents` | List agents and the current selection |
+| `/agent` | Show the active agent |
+| `/agent <id>` | Select an agent |
+| `/agent none` | Clear the selected agent |
+| `/agent new <name> [desc]` | Create a new agent and select it |
+| `/agent delete <id>` | Delete an agent (resets selection if active) |
 | `/clear` | Clear current chat |
 | `/stop` | Stop generation |
 | `/config` | Show config/data/log paths |

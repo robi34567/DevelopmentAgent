@@ -16,9 +16,18 @@ const {
     getProviderList,
     getProviderType,
     getSystemPrompt,
+    getSelectedAgent,
     loadConfig,
     saveConfig
 } = require('../out/core/config.js');
+const {
+    listAgents,
+    readAgent,
+    createAgent,
+    updateAgent,
+    deleteAgent,
+    getAgentsDir
+} = require('../out/core/agents.js');
 
 const args = process.argv.slice(2);
 const PORT = parseInt(process.env.MAGGOT_PORT || args[0] || '8787', 10);
@@ -115,6 +124,9 @@ function emitEngineEvent(evt) {
         case 'setModel':
             broadcast({ type: 'setModel', model: evt.model });
             break;
+        case 'setAgent':
+            broadcast({ type: 'setAgent', agent: evt.agent });
+            break;
         case 'setApproval':
             broadcast({ type: 'setApproval', mode: evt.mode });
             break;
@@ -165,6 +177,9 @@ function handleSaveConfig(config) {
         }
         if (!config.aiProvider || !providers[config.aiProvider]) config.aiProvider = ids[0];
         const saved = saveConfig(config);
+        if (config.selectedAgent !== undefined) {
+            engine.setSelectedAgent(config.selectedAgent);
+        }
         const provType = getActiveProvider();
         const provCfg = getProviderConfig(provType);
         engine.currentModel = provCfg.model || '';
@@ -225,6 +240,73 @@ async function handleFetchModels(providerType) {
     }
 }
 
+// ── Agents (.github/agents/*.md) ──────────────────────────────────────────────
+
+function broadcastAgents() {
+    const agents = listAgents(WORKSPACE);
+    broadcast({
+        type: 'agentsList',
+        agents: agents.map(a => ({ id: a.id, name: a.name, description: a.description, content: a.content })),
+        activeId: engine.selectedAgentId
+    });
+}
+
+function sendAgents(ws) {
+    const agents = listAgents(WORKSPACE);
+    if (ws.readyState !== 1) return;
+    try {
+        ws.send(JSON.stringify({
+            type: 'agentsList',
+            agents: agents.map(a => ({ id: a.id, name: a.name, description: a.description, content: a.content })),
+            activeId: engine.selectedAgentId
+        }));
+    } catch (e) {}
+}
+
+function handleChangeAgent(id) {
+    engine.setAgent(id);
+    try {
+        const cfg = loadConfig();
+        cfg.selectedAgent = id || '';
+        saveConfig(cfg);
+    } catch (e) {
+        appendLog('[CONFIG] Failed to save agent: ' + e.message);
+    }
+    broadcast({ type: 'configSaved', config: loadConfig(), configPath: getConfigPath() });
+    broadcastAgents();
+}
+
+function handleSaveAgent(input) {
+    try {
+        let agent;
+        if (input.id && readAgent(WORKSPACE, input.id)) {
+            agent = updateAgent(WORKSPACE, input.id, input);
+        } else {
+            agent = createAgent(WORKSPACE, input);
+            engine.setAgent(agent.id);
+        }
+        try {
+            const cfg = loadConfig();
+            cfg.selectedAgent = engine.selectedAgentId;
+            saveConfig(cfg);
+        } catch (e) {}
+    } catch (err) {
+        broadcast({ type: 'error', text: err.message || 'Failed to save agent.' });
+        return;
+    }
+    broadcast({ type: 'configSaved', config: loadConfig(), configPath: getConfigPath() });
+    broadcastAgents();
+}
+
+function handleDeleteAgent(id) {
+    deleteAgent(WORKSPACE, id);
+    if (engine.selectedAgentId === id) {
+        handleChangeAgent('');
+    }
+    broadcast({ type: 'configSaved', config: loadConfig(), configPath: getConfigPath() });
+    broadcastAgents();
+}
+
 // ── Per-connection init state ─────────────────────────────────────────────────
 
 function sendInitState(ws) {
@@ -232,8 +314,10 @@ function sendInitState(ws) {
     send({ type: 'configLoaded', config: loadConfig(), configPath: getConfigPath() });
     send({ type: 'setProvider', provider: getActiveProvider() });
     send({ type: 'setModel', model: engine.currentModel || '' });
+    send({ type: 'setAgent', agent: engine.selectedAgentId });
     send({ type: 'setApproval', mode: getApprovalMode() });
     send({ type: 'thinkingToggled', show: engine.showThinkingValue });
+    sendAgents(ws);
     const history = engine.getChatHistory();
     if (history.length > 0) {
         send({ type: 'sessionLoaded', sessionId: engine.activeSession, sessionName: '', chatHtml: '', chatHistory: history });
@@ -262,6 +346,18 @@ async function handleClientMessage(msg, ws) {
         case 'changeModel':
             handleChangeModel(msg.model);
             break;
+        case 'getAgents':
+            broadcastAgents();
+            break;
+        case 'changeAgent':
+            handleChangeAgent(msg.agent);
+            break;
+        case 'saveAgent':
+            handleSaveAgent(msg);
+            break;
+        case 'deleteAgent':
+            handleDeleteAgent(msg.id);
+            break;
         case 'changeApproval':
             engine.approvalModeValue = msg.mode;
             broadcast({ type: 'setApproval', mode: msg.mode });
@@ -271,6 +367,7 @@ async function handleClientMessage(msg, ws) {
             break;
         case 'getConfig':
             broadcast({ type: 'configLoaded', config: loadConfig(), configPath: getConfigPath() });
+            broadcastAgents();
             break;
         case 'saveConfig':
             handleSaveConfig(msg.config);
@@ -295,7 +392,8 @@ async function handleClientMessage(msg, ws) {
             broadcast({ type: 'thinkingToggled', show: engine.showThinkingValue });
             break;
         case 'newSession':
-            engine.newSession();
+engine.setSelectedAgent(getSelectedAgent());
+engine.newSession();
             break;
         case 'saveSession':
             engine.saveSession(msg.name);

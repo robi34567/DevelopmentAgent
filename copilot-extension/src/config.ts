@@ -8,6 +8,7 @@ import {
     getProviderConfig as coreGetProviderConfig,
     getProviderList as coreGetProviderList,
     getProviderType as coreGetProviderType,
+    getSelectedAgent as coreGetSelectedAgent,
     getSystemPrompt as coreGetSystemPrompt,
     loadConfig as coreLoadConfig,
     saveConfig as coreSaveConfig,
@@ -81,4 +82,8 @@ export function getProviderList(): { id: string; label: string }[] {
 
 export function getProviderType(id: string): string {
     return coreGetProviderType(id);
+}
+
+export function getSelectedAgent(): string {
+    return coreGetSelectedAgent();
 }

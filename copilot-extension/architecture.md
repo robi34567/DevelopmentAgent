@@ -176,6 +176,29 @@ Unchanged: `COMPRESSION_THRESHOLD_CHARS` (30,000), `compressChatHistory()` in co
 - Localhost only, no auth (binds `127.0.0.1`). Run: `npm run webui` (from `webui/`) or
   `node webui/server.js [port] [workspace-root]`.
 
+### Agents (GitHub-Copilot style)
+
+- Agent definitions are Markdown files with YAML frontmatter in `<workspace>\.github\agents\`
+  (`src/core/agents.ts`): `sanitizeAgentId` derives the file name from the name, and
+  `parseFrontmatter`/`buildAgentFile` handle the `name`/`description` block. The body is the
+  instruction prompt.
+- `AgentEngine.setAgent(id)` validates the id via `readAgent` (unknown ids are rejected with a
+  system message) and emits a `setAgent` event. The selection lives on the engine, is persisted in
+  `config.json` (`selectedAgent`) and in each session, and is restored from config at startup in
+  every frontend.
+- Prompt injection: `getEffectiveSystemPrompt()` appends `buildAgentPrompt(agent)` — the agent's
+  description + body prefixed with "You are now operating as the agent ..." — to
+  `hooks.getSystemPrompt()` whenever an agent is selected. Both `sendMessage` and `memorize` use it.
+- Frontends implement their own CRUD surface against the shared engine + `agents.ts`:
+  - **VS Code** (`extension.ts`): `local-copilot.newAgent` command, "Save agent"/delete buttons in
+    the config modal, agent dropdown in the header.
+  - **CLI** (`cli.ts`): `/agents` and the `/agent` family.
+  - **webUI** (`server.js`): mirrors the VS Code handlers over WebSocket (`changeAgent`,
+    `saveAgent`, `deleteAgent`); the agent dropdown lists the server's `/agents` endpoint.
+- The webview UI (`main.js`) is shared: `fillAgentOptions` renders both the header
+  `#agent-select` and the config modal's agent blocks/`#config-agent` select; `applyConfig`
+  restores the selection and `agentsList`/`setAgent` messages keep them in sync.
+
 ---
 
 ## 6. File Layout (target)
@@ -190,6 +213,7 @@ copilot-extension/
       config.ts                  # config.json load/save, provider config
       providers.ts               # pure HTTP providers + createCoreProvider
       engine.ts                  # AgentEngine (agentic loop) + EngineEvent stream
+      agents.ts                  # agent CRUD: .github/agents/*.md + frontmatter + prompt builder
       tools.ts                   # ToolExecutor (commands, files, search, approval)
       session.ts                 # SessionStore, memory/compression
     config.ts                    # VS Code adapter over core/config.ts

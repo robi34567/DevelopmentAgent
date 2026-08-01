@@ -32,6 +32,7 @@ export interface AppConfig {
     aiProvider: string;
     approvalMode: string;
     systemPrompt: string;
+    selectedAgent?: string;
     providers: { [id: string]: ProviderConfig };
 }
 

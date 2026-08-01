@@ -128,6 +128,11 @@ export function getApprovalMode(): string {
     return cfg.approvalMode || 'safe';
 }
 
+export function getSelectedAgent(): string {
+    const cfg = loadConfig();
+    return cfg.selectedAgent || '';
+}
+
 export function getProviderConfig(type: string, fallbacks?: ProviderConfig): ProviderConfig {
     const cfg = loadConfig();
     const prov = (cfg.providers as any)[type] || {};

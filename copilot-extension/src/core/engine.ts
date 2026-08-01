@@ -3,6 +3,7 @@ import * as tools from './tools';
 import { SessionStore, Session } from './session';
 import { getProviderType } from './config';
 import { fetchOllamaContextSize } from './providers';
+import { readAgent, buildAgentPrompt } from './agents';
 
 export const MAX_TOOL_ROUNDS = 10;
 export const COMPRESSION_THRESHOLD_CHARS = 30000;
@@ -27,6 +28,7 @@ export type EngineEvent =
     | { type: 'sessionLoaded'; sessionId: string; sessionName: string; chatHtml: string; chatHistory: ChatMessage[] }
     | { type: 'setProvider'; provider: string }
     | { type: 'setModel'; model: string }
+    | { type: 'setAgent'; agent: string }
     | { type: 'setApproval'; mode: string }
     | { type: 'sessionList'; sessions: { id: string; name: string; timestamp: string }[]; activeId: string }
     | { type: 'configSaved'; config: AppConfig; configPath: string };
@@ -57,6 +59,7 @@ export class AgentEngine {
     private globalMemories: string[] = [];
     private approvalMode: string = 'safe';
     private model: string = '';
+    private selectedAgent: string = '';
     private contextSize: number = 0;
     private isStreaming: boolean = false;
     private isProcessing: boolean = false;
@@ -109,6 +112,7 @@ export class AgentEngine {
     set approvalModeValue(m: string) { this.approvalMode = m; }
     get showThinkingValue(): boolean { return this.showThinking; }
     get activeSession(): string { return this.activeSessionId; }
+    get selectedAgentId(): string { return this.selectedAgent; }
     getChatHistory(): ChatMessage[] { return this.chatHistory; }
     getCompressedHistories(): string[] { return this.compressedHistories; }
     getSessionMemories(): string[] { return this.sessionMemories; }
@@ -120,6 +124,7 @@ export class AgentEngine {
     setProcessing(v: boolean) { this.isProcessing = v; }
     setStreaming(v: boolean) { this.isStreaming = v; }
     setProvider(p: AIProvider | null) { this.provider = p; }
+    setSelectedAgent(id: string) { this.selectedAgent = id || ''; }
 
     clearChat() {
         this.chatHistory = [];
@@ -127,7 +132,7 @@ export class AgentEngine {
         this.saveSessionHtml('');
     }
 
-    setState(state: Partial<{ chatHistory: ChatMessage[]; compressedHistories: string[]; sessionMemories: string[]; globalMemories: string[]; model: string; contextSize: number; approvalMode: string; activeSessionId: string; provider: AIProvider | null }>) {
+    setState(state: Partial<{ chatHistory: ChatMessage[]; compressedHistories: string[]; sessionMemories: string[]; globalMemories: string[]; model: string; contextSize: number; approvalMode: string; activeSessionId: string; selectedAgent: string; provider: AIProvider | null }>) {
         if (state.chatHistory !== undefined) this.chatHistory = [...state.chatHistory];
         if (state.compressedHistories !== undefined) this.compressedHistories = [...state.compressedHistories];
         if (state.sessionMemories !== undefined) this.sessionMemories = [...state.sessionMemories];
@@ -136,6 +141,7 @@ export class AgentEngine {
         if (state.contextSize !== undefined) this.contextSize = state.contextSize;
         if (state.approvalMode !== undefined) this.approvalMode = state.approvalMode;
         if (state.activeSessionId !== undefined) this.activeSessionId = state.activeSessionId;
+        if (state.selectedAgent !== undefined) this.selectedAgent = state.selectedAgent;
         if (state.provider !== undefined) this.provider = state.provider;
     }
 
@@ -181,6 +187,33 @@ export class AgentEngine {
 
     // ── Memory ───────────────────────────────────────────────────────────────
 
+    // Base system prompt from the hook, extended with the active agent's
+    // definition file (body + frontmatter) when one is selected.
+    private getEffectiveSystemPrompt(): string {
+        let prompt = this.hooks.getSystemPrompt();
+        if (this.selectedAgent) {
+            const agent = readAgent(this.hooks.getWorkspaceRoot(), this.selectedAgent);
+            if (agent) {
+                const agentPrompt = buildAgentPrompt(agent);
+                prompt = prompt ? `${prompt}\n\n${agentPrompt}` : agentPrompt;
+            }
+        }
+        return prompt;
+    }
+
+    setAgent(id: string) {
+        if (id && id !== '') {
+            const agent = readAgent(this.hooks.getWorkspaceRoot(), id);
+            if (!agent) {
+                this.emit({ type: 'systemMessage', content: `Unknown agent: ${id}. No agent selected.` });
+                return;
+            }
+        }
+        this.selectedAgent = id || '';
+        this.emit({ type: 'setAgent', agent: this.selectedAgent });
+        this.log(`[AGENT] Selected: ${this.selectedAgent || '(none)'}`);
+    }
+
     private buildMemoryMessages(): ChatMessage[] {
         const msgs: ChatMessage[] = [];
         for (const m of this.sessionMemories) {
@@ -204,7 +237,7 @@ export class AgentEngine {
             return;
         }
 
-        const systemPrompt = this.hooks.getSystemPrompt();
+        const systemPrompt = this.getEffectiveSystemPrompt();
 
         const messages: ChatMessage[] = [];
         if (systemPrompt) {
@@ -377,6 +410,7 @@ export class AgentEngine {
             model: this.model,
             provider: this.hooks.getActiveProviderId(),
             approvalMode: this.approvalMode,
+            agent: this.selectedAgent,
             compressedHistories: [],
             memories: []
         };
@@ -417,6 +451,7 @@ export class AgentEngine {
             model: this.model,
             provider: this.hooks.getActiveProviderId(),
             approvalMode: this.approvalMode,
+            agent: this.selectedAgent,
             compressedHistories: [...this.compressedHistories],
             memories: [...this.sessionMemories]
         };
@@ -462,6 +497,7 @@ export class AgentEngine {
         this.compressedHistories = session.compressedHistories ? [...session.compressedHistories] : [];
         this.sessionMemories = session.memories ? [...session.memories] : [];
         this.model = session.model;
+        this.selectedAgent = session.agent || '';
         this.refreshContextSize(session.model, session.provider);
         this.setActiveSessionId(id);
 
@@ -472,6 +508,7 @@ export class AgentEngine {
         this.emit({ type: 'sessionLoaded', sessionId: id, sessionName: session.name, chatHtml: session.chatHtml, chatHistory: session.chatHistory });
         this.emit({ type: 'setProvider', provider: session.provider });
         this.emit({ type: 'setModel', model: this.model || '' });
+        this.emit({ type: 'setAgent', agent: this.selectedAgent });
         this.emit({ type: 'setApproval', mode: session.approvalMode });
 
         this.emitSessionList();
@@ -602,7 +639,7 @@ export class AgentEngine {
             return;
         }
 
-        const systemPrompt = this.hooks.getSystemPrompt();
+        const systemPrompt = this.getEffectiveSystemPrompt();
 
         const userMsg: ChatMessage = { role: 'user', content: text };
         const curProvider = this.hooks.getActiveProviderId();

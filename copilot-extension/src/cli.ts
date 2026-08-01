@@ -13,9 +13,11 @@ import {
     getProviderList,
     getProviderType,
     getSystemPrompt,
+    getSelectedAgent,
     loadConfig,
     saveConfig
 } from './core/config';
+import { listAgents, createAgent, deleteAgent, getAgentsDir } from './core/agents';
 
 const args = process.argv.slice(2);
 const workspaceRoot = path.resolve(args[0] || process.cwd());
@@ -229,6 +231,9 @@ function onEvent(evt: EngineEvent) {
         case 'setModel':
             out(c.dim(`[model] ${evt.model || '(auto)'}`));
             break;
+        case 'setAgent':
+            out(c.dim(`[agent] ${evt.agent || 'none'}`));
+            break;
         case 'setApproval':
             out(c.dim(`[approval mode] ${evt.mode}`));
             break;
@@ -260,6 +265,15 @@ const engine = new AgentEngine({
     log: (entry) => appendLog('[ENGINE] ' + entry)
 });
 
+function selectAgent(id: string) {
+    engine.setAgent(id);
+    try {
+        const cfg = loadConfig();
+        cfg.selectedAgent = id || '';
+        saveConfig(cfg);
+    } catch {}
+}
+
 // ── Commands ──────────────────────────────────────────────────────────────────
 
 function printHelp() {
@@ -274,6 +288,10 @@ function printHelp() {
     out('  ' + c.cyan('/model <name>') + '    switch model');
     out('  ' + c.cyan('/providers') + '        list providers');
     out('  ' + c.cyan('/provider <id>') + '   switch provider');
+    out('  ' + c.cyan('/agents') + '           list agents (.github/agents)');
+    out('  ' + c.cyan('/agent') + '            show/select the active agent (none = no agent)');
+    out('  ' + c.cyan('/agent new <name> [desc]') + '  create a new agent and select it');
+    out('  ' + c.cyan('/agent delete <id>') + ' delete an agent');
     out('  ' + c.cyan('/approval <safe|all>') + '  set approval mode');
     out('  ' + c.cyan('/memorize') + '         save session memory');
     out('  ' + c.cyan('/memorize_global') + '  save global memory');
@@ -357,6 +375,58 @@ async function handleCommand(line: string): Promise<boolean> {
             if (mode !== 'safe' && mode !== 'all') { out(c.red('usage: /approval <safe|all>')); break; }
             engine.approvalModeValue = mode;
             out(c.dim(`approval mode: ${mode}`));
+            break;
+        }
+        case 'agents': {
+            const agents = listAgents(workspaceRoot);
+            out();
+            out(c.bold('agents:'));
+            if (agents.length === 0) out('  (none — use /agent new <name> to create one)');
+            for (const a of agents) {
+                const mark = a.id === engine.selectedAgentId ? c.green(' *') : '';
+                out(`  ${c.cyan(a.id)}  ${a.name}${mark}`);
+                if (a.description) out(c.dim(`      ${a.description}`));
+            }
+            out(c.dim(`dir: ${getAgentsDir(workspaceRoot)}`));
+            break;
+        }
+        case 'agent': {
+            const parts = arg.split(/\s+/).filter(Boolean);
+            if (parts.length === 0) {
+                const cur = engine.selectedAgentId;
+                out(cur ? c.dim(`active agent: ${cur}`) : c.dim('active agent: none'));
+                break;
+            }
+            if (parts[0] === 'new') {
+                const name = parts.slice(1).join(' ');
+                if (!name) { out(c.red('usage: /agent new <name> [description]')); break; }
+                try {
+                    const agent = createAgent(workspaceRoot, { name });
+                    selectAgent(agent.id);
+                    out(c.green(`✓ agent "${agent.name}" created and selected:`));
+                    out(c.dim(`  ${agent.filePath}`));
+                } catch (e: any) {
+                    out(c.red('✖ ' + e.message));
+                }
+                break;
+            }
+            if (parts[0] === 'delete') {
+                const id = parts[1];
+                if (!id) { out(c.red('usage: /agent delete <id>')); break; }
+                if (deleteAgent(workspaceRoot, id)) {
+                    if (engine.selectedAgentId === id) selectAgent('');
+                    out(c.dim(`deleted agent: ${id}`));
+                } else {
+                    out(c.red(`agent not found: ${id}`));
+                }
+                break;
+            }
+            const id = parts[0];
+            if (id === 'none' || id === 'off') {
+                selectAgent('');
+                break;
+            }
+            selectAgent(id);
             break;
         }
         case 'memorize':
@@ -443,10 +513,13 @@ function main() {
     out(c.dim('config:    ' + getConfigPath()));
     const active = getActiveProvider();
     const model = getProviderConfig(active).model || '(auto)';
+    const agent = getSelectedAgent();
     out(c.dim(`provider:  ${active} · model: ${model} · approval: ${getApprovalMode()}`));
+    out(c.dim(`agent:     ${agent || 'none'} · dir: ${getAgentsDir(workspaceRoot)}`));
     out(c.dim('type /help for commands, or just ask something.'));
     out();
 
+    engine.setSelectedAgent(getSelectedAgent());
     engine.newSession();
     prompt();
 }

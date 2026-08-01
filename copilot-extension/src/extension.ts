@@ -4,10 +4,11 @@ import * as fs from 'fs';
 import { exec } from 'child_process';
 import { AIProvider, ChatMessage, ResponseStats, createAIProvider } from './aiProvider';
 import { getWebviewContent } from './webview';
-import { getActiveProvider, getApprovalMode as getConfigApprovalMode, getProviderConfig, getProviderType, getSystemPrompt, loadConfig, saveConfig, getConfigPath } from './config';
+import { getActiveProvider, getApprovalMode as getConfigApprovalMode, getProviderConfig, getProviderType, getSystemPrompt, loadConfig, saveConfig, getConfigPath, getSelectedAgent } from './config';
 import { AgentEngine, EngineEvent } from './core/engine';
 import { fetchOllamaModels, fetchOpenAICompatibleModels } from './core/providers';
 import * as tools from './core/tools';
+import { listAgents, readAgent, createAgent, updateAgent, deleteAgent, getAgentsDir } from './core/agents';
 
 let currentPanel: vscode.WebviewPanel | undefined = undefined;
 let sidebarView: vscode.WebviewView | undefined = undefined;
@@ -149,6 +150,9 @@ function emitEngineEvent(evt: EngineEvent) {
             break;
         case 'setModel':
             postMessageToAllViews({ type: 'setModel', model: evt.model });
+            break;
+        case 'setAgent':
+            postMessageToAllViews({ type: 'setAgent', agent: evt.agent });
             break;
         case 'setApproval':
             postMessageToAllViews({ type: 'setApproval', mode: evt.mode });
@@ -340,6 +344,67 @@ async function handleFetchModels(providerType?: string) {
     }
 }
 
+// ── Agents (GitHub-Copilot-style .github/agents/*.md) ─────────────────────────
+
+function getWorkspaceRoot(): string {
+    return vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || '';
+}
+
+function broadcastAgents() {
+    const agents = listAgents(getWorkspaceRoot());
+    postMessageToAllViews({
+        type: 'agentsList',
+        agents: agents.map(a => ({ id: a.id, name: a.name, description: a.description, content: a.content })),
+        activeId: engine.selectedAgentId
+    });
+}
+
+function handleChangeAgent(id: string) {
+    engine.setAgent(id);
+    try {
+        const cfg = loadConfig();
+        cfg.selectedAgent = id || '';
+        saveConfig(cfg);
+    } catch (e: any) {
+        console.error('[Maggot] Failed to save agent to config:', e.message);
+    }
+    postMessageToAllViews({ type: 'configSaved', config: loadConfig(), configPath: getConfigPath() });
+    broadcastAgents();
+}
+
+function handleSaveAgent(input: { id?: string; name: string; description?: string; content?: string }) {
+    const root = getWorkspaceRoot();
+    try {
+        let agent;
+        if (input.id && readAgent(root, input.id)) {
+            agent = updateAgent(root, input.id, input);
+        } else {
+            agent = createAgent(root, input);
+            engine.setAgent(agent.id);
+        }
+        try {
+            const cfg = loadConfig();
+            cfg.selectedAgent = engine.selectedAgentId;
+            saveConfig(cfg);
+        } catch {}
+    } catch (err: any) {
+        postMessageToAllViews({ type: 'error', text: err.message || 'Failed to save agent.' });
+        return;
+    }
+    postMessageToAllViews({ type: 'configSaved', config: loadConfig(), configPath: getConfigPath() });
+    broadcastAgents();
+}
+
+function handleDeleteAgent(id: string) {
+    const root = getWorkspaceRoot();
+    deleteAgent(root, id);
+    if (engine.selectedAgentId === id) {
+        handleChangeAgent('');
+    }
+    postMessageToAllViews({ type: 'configSaved', config: loadConfig(), configPath: getConfigPath() });
+    broadcastAgents();
+}
+
 // ── Config UI ─────────────────────────────────────────────────────────────────
 
 function handleSaveConfig(config: any) {
@@ -370,6 +435,10 @@ function handleSaveConfig(config: any) {
         }
         postMessageToAllViews({ type: 'configSaved', config: saved, configPath: getConfigPath() });
         logToFile(`[CONFIG] Config saved to ${getConfigPath()}`);
+        if (config.selectedAgent !== undefined) {
+            engine.setSelectedAgent(config.selectedAgent);
+        }
+        broadcastAgents();
     } catch (err: any) {
         postMessageToAllViews({
             type: 'error',
@@ -465,6 +534,18 @@ async function handleWebviewMessage(message: any, send: (msg: any) => void) {
             case 'changeModel':
                 handleChangeModel(message.model);
                 break;
+            case 'getAgents':
+                broadcastAgents();
+                break;
+            case 'changeAgent':
+                handleChangeAgent(message.agent);
+                break;
+            case 'saveAgent':
+                handleSaveAgent(message);
+                break;
+            case 'deleteAgent':
+                handleDeleteAgent(message.id);
+                break;
             case 'fetchModels':
                 await handleFetchModels(message.provider);
                 break;
@@ -482,6 +563,7 @@ async function handleWebviewMessage(message: any, send: (msg: any) => void) {
                 break;
             case 'getConfig':
                 send({ type: 'configLoaded', config: loadConfig(), configPath: getConfigPath() });
+                broadcastAgents();
                 break;
             case 'saveConfig':
                 handleSaveConfig(message.config);
@@ -607,6 +689,7 @@ export function activate(context: vscode.ExtensionContext) {
     engine = createEngine();
     engine.setShowThinking(showThinking);
     engine.approvalModeValue = getApprovalMode();
+    engine.setSelectedAgent(getSelectedAgent());
     engine.setState({ globalMemories: workspaceState?.get<string[]>('globalMemories', []) || [] });
 
     // Initialize session: restore last active session or create a new one
@@ -693,6 +776,35 @@ export function activate(context: vscode.ExtensionContext) {
         }
     });
     context.subscriptions.push(openConfigCommand);
+
+    const newAgentCommand = vscode.commands.registerCommand('local-copilot.newAgent', async () => {
+        const root = getWorkspaceRoot();
+        if (!root) {
+            vscode.window.showErrorMessage('Open a workspace folder first to create an agent.');
+            return;
+        }
+        const name = await vscode.window.showInputBox({
+            prompt: 'Agent name (e.g. Reviewer, Architect)',
+            placeHolder: 'Reviewer'
+        });
+        if (!name || !name.trim()) return;
+        const description = await vscode.window.showInputBox({
+            prompt: 'What does this agent do? (short description)',
+            placeHolder: 'e.g. Reviews code for bugs and suggests fixes'
+        });
+        let agent;
+        try {
+            agent = createAgent(root, { name: name.trim(), description: description || '' });
+        } catch (e: any) {
+            vscode.window.showErrorMessage(`Failed to create agent: ${e.message}`);
+            return;
+        }
+        const doc = await vscode.workspace.openTextDocument(vscode.Uri.file(agent.filePath));
+        await vscode.window.showTextDocument(doc);
+        handleChangeAgent(agent.id);
+        vscode.window.showInformationMessage(`Agent "${agent.name}" created in ${getAgentsDir(root)}. Edit the file and save, then it is active.`);
+    });
+    context.subscriptions.push(newAgentCommand);
 
     const statusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);
     statusBarItem.text = "$(comment-discussion) Maggot chat";

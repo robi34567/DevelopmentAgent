@@ -55,6 +55,10 @@
       {
         "command": "local-copilot.openConfigFile",
         "title": "Maggot chat: Open Config File"
+      },
+      {
+        "command": "local-copilot.newAgent",
+        "title": "Maggot chat: New Agent"
       }
     ],
     "configuration": {

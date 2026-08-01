@@ -12,6 +12,7 @@ export interface Session {
     model: string;
     provider: string;
     approvalMode: string;
+    agent?: string;
     compressedHistories: string[];
     memories: string[];
 }

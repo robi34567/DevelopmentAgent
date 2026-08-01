@@ -101,7 +101,7 @@ function pageHtml(csp: string, scriptSrc: string, preScripts: string, extraHead:
             gap: 8px;
             align-items: center;
         }
-        #provider-select, #model-select {
+        #provider-select, #model-select, #agent-select {
             background: var(--vscode-dropdown-background);
             color: var(--vscode-dropdown-foreground);
             border: 1px solid var(--vscode-dropdown-border);
@@ -109,6 +109,9 @@ function pageHtml(csp: string, scriptSrc: string, preScripts: string, extraHead:
             border-radius: 4px;
             font-size: 12px;
             cursor: pointer;
+        }
+        #agent-select {
+            max-width: 160px;
         }
         #clear-btn {
             background: none;
@@ -695,6 +698,73 @@ function pageHtml(csp: string, scriptSrc: string, preScripts: string, extraHead:
             background: var(--vscode-button-hoverBackground);
             color: var(--vscode-button-foreground);
         }
+        #config-agents {
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }
+        #config-add-agent {
+            margin-top: 10px;
+            padding: 6px 12px;
+            border: 1px dashed var(--vscode-panel-border);
+            border-radius: 4px;
+            background: none;
+            color: var(--vscode-editor-foreground);
+            cursor: pointer;
+            font-size: 12px;
+            width: 100%;
+        }
+        #config-add-agent:hover {
+            background: var(--vscode-button-hoverBackground);
+            color: var(--vscode-button-foreground);
+        }
+        .agent-block {
+            border: 1px solid var(--vscode-panel-border);
+            border-radius: 6px;
+            padding: 8px 12px;
+            background: var(--vscode-sideBar-background);
+        }
+        .agent-block-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 6px;
+        }
+        .agent-name {
+            font-size: 12px;
+            font-weight: 600;
+        }
+        .agent-delete {
+            background: none;
+            border: none;
+            color: var(--vscode-errorForeground);
+            cursor: pointer;
+            font-size: 13px;
+            padding: 2px 6px;
+            border-radius: 4px;
+        }
+        .agent-delete:hover { background: var(--vscode-inputValidation-errorBackground); }
+        .agent-block .ag-row {
+            display: flex;
+            gap: 8px;
+        }
+        .agent-block .ag-row > div { flex: 1; }
+        .agent-save {
+            margin-top: 8px;
+            padding: 4px 12px;
+            background: var(--vscode-button-background);
+            color: var(--vscode-button-foreground);
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 11px;
+        }
+        .agent-save:hover { background: var(--vscode-button-hoverBackground); }
+        .agent-hint {
+            font-size: 10px;
+            color: var(--vscode-descriptionForeground);
+            margin-top: 6px;
+        }
         .provider-block {
             border: 1px solid var(--vscode-panel-border);
             border-radius: 6px;
@@ -770,6 +840,9 @@ function pageHtml(csp: string, scriptSrc: string, preScripts: string, extraHead:
     <div id="header">
         <h1><span class="icon">🤖</span> Maggot chat</h1>
         <div id="header-controls">
+            <select id="agent-select" title="Active agent (definitions in .github/agents)">
+                <option value="">No agent</option>
+            </select>
             <select id="provider-select">
                 <option value="">Loading...</option>
             </select>
@@ -805,8 +878,15 @@ function pageHtml(csp: string, scriptSrc: string, preScripts: string, extraHead:
                 <option value="all">Auto: All</option>
                 <option value="ask">Always Ask</option>
             </select>
+            <label for="config-agent">Active Agent</label>
+            <select id="config-agent">
+                <option value="">No agent</option>
+            </select>
             <label for="config-system-prompt">System Prompt</label>
             <textarea id="config-system-prompt" placeholder="Leave empty to use the default prompt"></textarea>
+            <div class="config-section">Agents (.github/agents)</div>
+            <div id="config-agents"></div>
+            <button id="config-add-agent" type="button" title="Create a new agent in .github/agents">+ Add agent</button>
             <div class="config-section">Providers</div>
             <div id="config-providers"></div>
             <button id="config-add-provider" type="button" title="Add a new provider">+ Add provider</button>

@@ -21,6 +21,7 @@
     var batchTriesInput = document.getElementById('batch-tries');
     var providerSelect = document.getElementById('provider-select');
     var modelSelect = document.getElementById('model-select');
+    var agentSelect = document.getElementById('agent-select');
     var approvalSelect = document.getElementById('approval-select');
     var newSessionBtn = document.getElementById('new-session-btn');
     var sessionSelect = document.getElementById('session-select');
@@ -34,6 +35,7 @@
     var cmdHistory = [];
     var cmdHistoryPos = -1;
     var pendingImages = [];
+    var agentsCache = [];
 
     function dataUrlToBlob(dataUrl) {
         var parts = dataUrl.split(',');
@@ -246,6 +248,10 @@
         }
     });
 
+    agentSelect.addEventListener('change', function() {
+        vscode.postMessage({ type: 'changeAgent', agent: this.value });
+    });
+
     modelSelect.addEventListener('change', function() {
         if (this.value) {
             vscode.postMessage({ type: 'changeModel', model: this.value });
@@ -310,6 +316,29 @@
             opt.textContent = name;
             modelSelect.appendChild(opt);
         });
+    }
+
+    function fillAgentOptions(sel, agents, activeId) {
+        if (!sel) return;
+        sel.innerHTML = '';
+        var none = document.createElement('option');
+        none.value = '';
+        none.textContent = 'No agent';
+        sel.appendChild(none);
+        (agents || []).forEach(function(a) {
+            var opt = document.createElement('option');
+            opt.value = a.id;
+            opt.textContent = a.name;
+            sel.appendChild(opt);
+        });
+        if (activeId) sel.value = activeId;
+    }
+
+    function populateAgentSelect(agents, activeId) {
+        agentsCache = agents || [];
+        fillAgentOptions(agentSelect, agentsCache, activeId);
+        fillAgentOptions(field('config-agent'), agentsCache, activeId);
+        renderAgentBlocks();
     }
 
     function sendMessage() {
@@ -746,6 +775,12 @@
                         modelSelect.value = message.model;
                     }
                     break;
+                case 'setAgent':
+                    populateAgentSelect(agentsCache, message.agent);
+                    break;
+                case 'agentsList':
+                    populateAgentSelect(message.agents, message.activeId);
+                    break;
                 case 'modelList':
                     if (!message.provider || message.provider === providerSelect.value) {
                         populateModels(message.models, message.error);
@@ -1155,6 +1190,10 @@
             if (approvalSelect) approvalSelect.value = cfg.approvalMode;
         }
         if (cfg.systemPrompt !== undefined) setFieldValue('config-system-prompt', cfg.systemPrompt);
+        if (cfg.selectedAgent !== undefined) {
+            fillAgentOptions(field('config-agent'), agentsCache, cfg.selectedAgent);
+            if (agentSelect) agentSelect.value = cfg.selectedAgent;
+        }
         rebuildProviderOptions();
         renderProviderBlocks(cfg);
         var active = cfg.aiProvider || cfg.activeProvider;
@@ -1189,9 +1228,62 @@
         return providers;
     }
 
+    // ----- Agent editor (config modal) -----
+    var configAgents = document.getElementById('config-agents');
+
+    function buildAgentBlock(a) {
+        a = a || {};
+        var idVal = a.id || '';
+        var div = document.createElement('div');
+        div.className = 'agent-block';
+        div.innerHTML =
+            '<div class="agent-block-header">' +
+            '  <span class="agent-name">' + escapeHtml(a.name || 'New Agent') + '</span>' +
+            '  <button type="button" class="agent-delete" title="Delete agent file">&#128465;</button>' +
+            '</div>' +
+            '<div class="ag-row">' +
+            '  <div><label>Name</label><input type="text" class="ag-name" value="' + escapeHtml(a.name || '') + '"></div>' +
+            '  <div><label>Description</label><input type="text" class="ag-desc" value="' + escapeHtml(a.description || '') + '"></div>' +
+            '</div>' +
+            '<label>Instructions (body of the agent file)</label>' +
+            '<textarea class="ag-content" placeholder="Write the agent instructions here...">' + escapeHtml(a.content || '') + '</textarea>' +
+            '<div style="display:flex;gap:8px;align-items:center;justify-content:space-between;">' +
+            '  <span class="agent-hint">Stored as .github/agents/' + escapeHtml(idVal || '&lt;name&gt;') + '.md</span>' +
+            '  <button type="button" class="agent-save">Save</button>' +
+            '</div>';
+        div.querySelector('.agent-delete').addEventListener('click', function() {
+            if (!idVal) { div.remove(); return; }
+            vscode.postMessage({ type: 'deleteAgent', id: idVal });
+        });
+        div.querySelector('.agent-save').addEventListener('click', function() {
+            var name = div.querySelector('.ag-name').value.trim();
+            if (!name) { addMessage('system', 'Agent name is required.'); return; }
+            vscode.postMessage({
+                type: 'saveAgent',
+                id: idVal || '',
+                name: name,
+                description: div.querySelector('.ag-desc').value.trim(),
+                content: div.querySelector('.ag-content').value
+            });
+        });
+        div.querySelector('.ag-name').addEventListener('input', function() {
+            div.querySelector('.agent-name').textContent = this.value.trim() || 'New Agent';
+        });
+        return div;
+    }
+
+    function renderAgentBlocks() {
+        if (!configAgents) return;
+        configAgents.innerHTML = '';
+        agentsCache.forEach(function(a) {
+            configAgents.appendChild(buildAgentBlock({ id: a.id, name: a.name, description: a.description, content: a.content }));
+        });
+    }
+
     if (configBtn && configOverlay) {
         configBtn.addEventListener('click', function() {
             vscode.postMessage({ type: 'getConfig' });
+            vscode.postMessage({ type: 'getAgents' });
             configOverlay.classList.add('open');
             var statusEl = field('config-status');
             if (statusEl) statusEl.textContent = '';
@@ -1208,6 +1300,11 @@
             var last = configProviders.lastElementChild;
             if (last) last.querySelector('.pf-id').focus();
         });
+        field('config-add-agent').addEventListener('click', function() {
+            configAgents.appendChild(buildAgentBlock({}));
+            var last = configAgents.lastElementChild;
+            if (last) last.querySelector('.ag-name').focus();
+        });
         field('config-save-btn').addEventListener('click', function() {
             var providers = collectProviders();
             var active = field('config-active-provider').value;
@@ -1219,6 +1316,7 @@
                 aiProvider: active,
                 approvalMode: field('config-approval').value,
                 systemPrompt: field('config-system-prompt').value,
+                selectedAgent: field('config-agent').value,
                 providers: providers
             };
             if (Object.keys(providers).length === 0) {
@@ -1245,6 +1343,7 @@
     vscode.postMessage({ type: 'getApproval' });
     vscode.postMessage({ type: 'getSessions' });
     vscode.postMessage({ type: 'getThinkingState' });
+    vscode.postMessage({ type: 'getAgents' });
 
     if (providerSelect.value && providerCanFetchModels(providerSelect.value)) {
         modelSelect.style.display = '';
