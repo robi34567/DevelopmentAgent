@@ -1,232 +1,238 @@
-# Architecture: Local Copilot VS Code Extension
+# Architecture: Maggot
 
 ## Overview
 
-A VS Code extension providing a Copilot-like AI chat sidebar/panel with local command execution. The model communicates via an **agentic loop**: it outputs `[CMD]...[/CMD]` blocks which the extension executes and feeds back as context.
+Maggot is a local, agentic coding assistant. The same model-handling/agent engine powers three frontends:
+
+- **Maggot chat** — VS Code extension (the current `local-copilot` product, rebranded).
+- **Maggot CLI** — a terminal REPL (no `vscode-lm`, no VS Code).
+- **Maggot webUI** — a self-hosted web UI (no `vscode-lm`).
+
+All frontends share one core: **Maggot Agent Engine** (pure TypeScript/Node, zero `vscode` imports).
 
 ---
 
-## 1. Communication Architecture
+## 1. Target Architecture
 
 ```
-main.js (webview)  <--postMessage-->  extension.ts (host)  <--HTTP/VS Code API-->  AI Provider
+┌─────────────────────────────────────────────────────────────┐
+│  MAGGO T AGENT ENGINE  (copilot-extension/src/core)          │
+│                                                             │
+│  - AgentEngine: agentic loop ([CMD]/[READ]/[WRITE]/[SEARCH]  │
+│    /[FILES]/[ASK]/[CHOICES]), emits EngineEvent async iterable│
+│  - ToolExecutor: safe/dangerous command classification,      │
+│    approval modes (safe/auto/ask), file read/write/search    │
+│  - Provider registry + HTTP-only providers (ollama, openai,  │
+│    lmstudio, janai)                                          │
+│  - SessionStore + memory/compression                         │
+│  - Pure Node config (shared config.json format)              │
+│  - EngineEvent types: assistantDelta, finalize, toolStart,   │
+│    toolOutput, ask, choices, choiceResult, error             │
+└───────────────┬─────────────────────────────────────────────┘
+                │
+   ┌────────────┼─────────────────┐
+   ▼            ▼                 ▼
+Maggot chat   Maggot CLI      Maggot webUI
+(VS Code)     (readline REPL) (Node server + WebSocket)
+   │            │                 │
+   │  transport shim (postMessage ↔ EngineEvent)
+   │  vscode-lm + GitHub Copilot providers registered HERE (VS Code-only)
+   ▼            ▼                 ▼
+ shared config.json / sessions / logs (%USERPROFILE%\.vscode\extensions\local-copilot\)
 ```
 
-- **`extension.ts`** is the host process — owns session state, provider lifecycle, command execution, and logging.
-- **`main.js`** is the frontend running inside a VS Code webview — renders chat UI, captures user input, sends/receives typed messages.
-- **`webview.ts`** generates the HTML/CSS template; the compiled `main.js` is injected as a script.
-- Messages are JSON with a `type` field (e.g. `sendMessage`, `changeProvider`, `modelList`).
+Key properties:
+
+- `core/` contains **no `vscode` import** — it runs in Node with only `http`/`https`/`fs`/`path`/`os`.
+- The VS Code adapter (`src/aiProvider.ts`, `src/config.ts`) registers `vscode-lm` and GitHub Copilot providers and reroutes config fallbacks; the engine is otherwise identical across frontends.
+- Config, sessions, and logs share one on-disk format (`config.json`, `sessions/{id}.json`, `logs/YYYY-MM-DD.log`) so switching frontends is seamless. Web adds token auth on top; CLI uses plain text.
+
+### Engine construction
+
+```typescript
+const engine = createEngine(config, {
+    sessionStore,      // load/save session JSON
+    logger?,           // optional logger
+    envHooks?,         // openLink, openFile, terminal display
+});
+for await (const evt of engine.stream('user message')) { /* handle EngineEvent */ }
+```
+
+### EngineEvent
+
+| Event | Payload | Meaning |
+|-------|---------|---------|
+| `assistantDelta` | `{ text }` | streaming assistant text |
+| `finalize` | `{ content, stats }` | assistant message finished |
+| `toolStart` | `{ name, args }` | about to run a tool (e.g. `[CMD]`) |
+| `toolOutput` | `{ name, output }` | tool result (`[OUTPUT]`/`[ERROR]`) |
+| `ask` | `{ question }` | model asked the user (`[ASK]`) |
+| `choices` | `{ options }` | model offered choices (`[CHOICES]`) |
+| `choiceResult` | `{ selected }` | user's selection |
+| `error` | `{ message }` | error, loop aborts |
 
 ---
 
-## 2. Provider System (Key Design Element)
+## 2. Provider System
 
-### Interface (`aiProvider.ts:18-21`)
+### Interface (`core/types.ts`)
 
 ```typescript
 export interface AIProvider {
-    sendMessage(messages, onChunk): Promise<{ content, stats }>;
+    sendMessage(messages, onChunk): Promise<{ content, stats, thinking? }>;
     abort(): void;
 }
 ```
 
-Every provider implements this interface. The `stats` field carries `tokenCount`, `durationMs`, `tokensPerSec`, and optionally `promptEvalCount` / `contextSize`.
+### Pure HTTP providers (core, no vscode)
 
-### Factory pattern (`aiProvider.ts:493-509`)
+- `OllamaProvider` — NDJSON (`readStream`).
+- `OpenAIProvider`, `LMStudioProvider`, `JanAIProvider` — SSE (`readSSEStream`).
+- `createCoreProvider(type, modelOverride?)` — factory for the pure providers.
 
-`createAIProvider(type, modelOverride?)` is a switch-based factory. Each provider is instantiated from its config settings.
+### VS Code-only providers (registered in the VS Code adapter)
 
-### Two streaming wire formats
+- `VSCodeLMProvider` — `vscode.lm.selectChatModels()` / `LanguageModelChat`.
+- `CopilotWebProvider` — `GitHub.copilot` extension `getChatCompletions`.
 
-| Format | Parser | Provider | Data format |
-|--------|--------|----------|-------------|
-| NDJSON (Ollama) | `readStream()` (lines 73-166) | Ollama | `{"message":{"content":"..."},"done":true/false}` |
-| SSE (OpenAI-compat) | `readSSEStream()` (lines 168-246) | LM Studio, JAN AI, OpenAI | `data: {"choices":[{"delta":{"content":"..."}}]}` |
+The adapter's `createAIProvider(type, modelOverride?)` keeps the same signature as today and delegates non-`vscode-lm`/non-`copilot-web` types to `createCoreProvider`.
 
-The SSE parser also captures `usage.prompt_tokens` / `usage.completion_tokens` from the final chunk.
+### Config access
 
-### Provider categories
-
-- **Local model servers** (Ollama, LM Studio, JAN AI): HTTP to localhost, list models via API, require no auth.
-- **Remote API** (OpenAI): HTTPS to cloud, requires API key.
-- **Extension-based** (GitHub Copilot): Uses VS Code extension API (`getChatCompletions`).
-
-### Pattern for adding a new local provider
-
-Local providers that speak OpenAI-compatible SSE need changes in **5 files**:
-
-| Step | File | What to change |
-|------|------|----------------|
-| 1 | `package.json` | Add name to `aiProvider` enum; add `*Endpoint` + `*Model` config properties |
-| 2 | `src/aiProvider.ts` | Create class implementing `AIProvider`; add `case` to factory |
-| 3 | `src/extension.ts` | Add `fetch*Models()`; update `handleFetchModels`, `handleChangeModel`, `fetchModelContextSize`, `ensureProvider`; update both webview startup guards |
-| 4 | `src/webview.ts` | Add `<option>` to the provider `<select>` |
-| 5 | `src/main.js` | Add provider name to every `if (ollama || lmstudio)` guard (6 occurrences) |
+`core/config.ts` reads/writes `config.json` only. The VS Code adapter adds `vscode.workspace.getConfiguration('local-copilot')` values as fallbacks, preserving today's precedence (file wins, settings fill gaps).
 
 ---
 
-## 3. Session Management (`extension.ts:46-315`)
+## 3. Session Management
 
-### Storage
-Sessions are JSON files at `%USERPROFILE%\.vscode\extensions\local-copilot\sessions\{id}.json`.
+Unchanged on-disk model:
 
-### Session data model
 ```typescript
 interface Session {
     id: string;
     name: string;
     timestamp: string;
     chatHistory: ChatMessage[];
-    chatHtml: string;       // snapshot of rendered HTML for restoring UI
+    chatHtml: string;          // VS Code chat only; other frontends render their own
     model: string;
     provider: string;
     approvalMode: string;
+    compressedHistories: string[];
 }
 ```
 
-### Lifecycle
-- `activate()` restores the last active session or creates a new one.
-- `handleNewSession()` saves the current session (if any), clears state, creates a fresh session.
-- `handleSaveSession()` persists the current chat history.
-- `handleLoadSession(id)` saves the current session, then loads the target one — including restoring the correct provider and model.
-- `handleDeleteSession(id)` removes the file; if it's the active session, a new one is created.
-
-### Active session ID persistence
-The active session ID is stored in `workspaceState` (VS Code's global state key-value store), so it survives extension reloads.
+`SessionStore` in core owns load/save/delete/list. `chatHtml` snapshots are VS Code-specific and ignored by CLI/web.
 
 ---
 
-## 4. Agentic Loop (`extension.ts:769-913`)
+## 4. Agentic Loop
 
-`handleSendMessage()` runs up to `MAX_TOOL_ROUNDS` (10) iterations:
+Moved into `core/AgentEngine`. Up to `MAX_TOOL_ROUNDS` (10) iterations:
 
-```
-1.  Build messages[] with system prompt + chat history
-2.  Call provider.sendMessage(messages, onChunk) — chunks streamed to webview in real-time
-3.  Extract [CMD]...[/CMD] blocks from the full response
-4.  If none → finalize, exit loop
-5.  If found → finalize the response, then for each command:
-    a. Check approval mode (all/safe/ask)
-    b. If approved, execute via child_process.exec()
-    c. Wrap stdout in [OUTPUT]...[/OUTPUT], stderr in [ERROR]...[/ERROR]
-6.  Append command output as a user message, show typing indicator, loop back to step 1
-```
+1. Build messages (system prompt + history).
+2. `provider.sendMessage` — chunks streamed as `assistantDelta`.
+3. Parse `[CMD]`, `[READ]`, `[WRITE]`, `[SEARCH]`, `[FILES]`, `[ASK]`, `[CHOICES]`.
+4. No tool tags → `finalize`, exit.
+5. Tools run via `ToolExecutor` after approval; results wrapped in `[OUTPUT]`/`[ERROR]`, appended as a user message, loop back.
 
-### Approval system (`extension.ts:366-382`)
+### Approval modes
 
-Three modes selected via dropdown:
-- **all**: auto-execute every command
-- **safe**: auto-execute only safe commands (whitelist at line 317-327), ask for others
-- **ask**: always prompt user
+- **all**: auto-execute every command.
+- **safe**: auto-execute whitelisted commands only, ask for others.
+- **ask**: always prompt.
 
-Dangerous commands (line 329-346) are flagged with a warning in the approval prompt.
+Dangerous commands (regex patterns) are flagged in the approval prompt.
+
+### Memory / compression
+
+Unchanged: `COMPRESSION_THRESHOLD_CHARS` (30,000), `compressChatHistory()` in core, results persisted in `compressedHistories`.
 
 ---
 
-## 5. Provider API Integration Points
+## 5. Frontend Adapters
 
-### Where each provider reference lives
+### Maggot chat (VS Code extension)
 
-| Purpose | File | Comments |
-|---------|------|----------|
-| Provider dropdown options | `webview.ts:411-417` | HTML `<option>` elements |
-| Provider enum validation | `package.json:54-59` | VS Code settings schema |
-| Provider factory | `aiProvider.ts:493-509` | `createAIProvider()` switch |
-| Provider class definitions | `aiProvider.ts` | One class per provider |
-| Model fetch routing | `extension.ts:1131-1159` | `handleFetchModels()` dispatches by type |
-| Model config key mapping | `extension.ts:1006` | `handleChangeModel()` selects config key |
-| Context size fetching | `extension.ts:1161-1197` | Currently only Ollama supports this |
-| Model selector visibility | `main.js:53, 389, 518` | Show model dropdown for local providers |
-| Startup model fetch | `extension.ts:507, 666` | Fetch models on webview creation |
+- `src/extension.ts` — activation, sessions, webview wiring. Replaced by a thin host that drives the engine and forwards `EngineEvent`s to `main.js` via `postMessage`.
+- `src/main.js` — webview client. Only VS Code coupling is `acquireVsCodeApi()` + `postMessage`; a transport shim maps messages to `EngineEvent`.
+- `src/config.ts`, `src/aiProvider.ts` — adapters adding `vscode` fallbacks + `vscode-lm`/Copilot providers.
 
----
+### Maggot CLI
 
-## 6. Model Fetching
+- Node `readline` REPL. No webview; renders `assistantDelta` to stdout, prompts for approvals/choices/asks, uses `envHooks` for links/files.
+- Uses pure providers + `core/config.ts` (no VS Code settings fallback).
 
-Each local provider has a dedicated `fetch*Models()` function that:
-1. Reads the endpoint from config
-2. Makes a GET request to the model list API
-3. Parses the response (`parsed.models[].name` for Ollama, `parsed.data[].id` for OpenAI-compatible)
-4. Returns a sorted `string[]`
+### Maggot webUI
 
-Results are posted to the webview as a `modelList` message.
+- Node `http`/`https` server + WebSocket. Same `main.js` UI via a transport shim; adds token auth on the server.
 
 ---
 
-## 7. File Layout
+## 6. File Layout (target)
 
 ```
 copilot-extension/
-  package.json                   # Extension manifest + VS Code config schema
-  install.ps1                    # Deploy script (copies out/ + package.json)
+  package.json                   # Maggot chat manifest (VS Code schema)
   tsconfig.json
   src/
-    aiProvider.ts                # AIProvider interface, all providers, factory, HTTP helpers
-    extension.ts                 # Activation, session management, agentic loop, command execution
-    webview.ts                   # HTML template + CSS for the chat UI
-    main.js                      # Frontend JS (NOT TypeScript — edited directly)
-  out/                           # Compiled output (tsc generates .js + .map + .d.ts)
+    core/                        # Maggot Agent Engine (pure TS/Node, no vscode)
+      types.ts                   # ChatMessage, AIProvider, EngineEvent, Session, ...
+      config.ts                  # config.json load/save, provider config
+      providers.ts               # pure HTTP providers + createCoreProvider
+      engine.ts                  # AgentEngine (agentic loop) + EngineEvent stream
+      tools.ts                   # ToolExecutor (commands, files, search, approval)
+      session.ts                 # SessionStore, memory/compression
+    config.ts                    # VS Code adapter over core/config.ts
+    aiProvider.ts                # VS Code adapter: VSCodeLM + Copilot providers
+    extension.ts                 # Maggot chat host (engine + webview wiring)
+    webview.ts                   # HTML/CSS template
+    main.js                      # shared frontend JS (webview / web transport shim)
+  out/                           # compiled output
 ```
+
+CLI and webUI live in sibling packages that `tsc` the `core/` sources directly.
 
 ---
 
-## 8. Build & Deploy
+## 7. Naming
+
+| Product | Old name | New name |
+|---------|----------|----------|
+| VS Code extension | Local Copilot | Maggot chat |
+| CLI | — | Maggot CLI |
+| Web UI | — | Maggot webUI |
+| Engine | — | Maggot Agent Engine |
+
+`package.json` `displayName`, extension view titles, and UI copy migrate to "Maggot". Console/log prefixes become `[Maggot]`. The on-disk data directory and `config.json` format are **not** renamed (compatibility).
+
+---
+
+## 8. Migration Plan
+
+1. **Core foundation (this commit):** extract `core/types.ts`, `core/config.ts`, `core/providers.ts`; `src/config.ts` and `src/aiProvider.ts` become thin adapters. Behavior identical, extension still compiles and runs.
+2. **Agent engine:** move the agentic loop, tool executors, session store, memory, and approval logic into `core/engine.ts` / `core/tools.ts` / `core/session.ts`; `extension.ts` drives the engine.
+3. **Maggot chat rename:** update `package.json`, webview copy, log prefixes.
+4. **Maggot CLI:** `readline` REPL on the engine.
+5. **Maggot webUI:** Node server + WebSocket + transport shim + token auth.
+6. **Docs:** update FEATURES.md and this file as each step lands.
+
+---
+
+## 9. Build & Deploy (VS Code)
 
 ```powershell
-npx tsc -p ./                   # Compile .ts → .js in out/
-.\install.ps1                    # Copy out/ + package.json to %USERPROFILE%\.vscode\extensions\...
-# Then reload VS Code window
+npm run compile                # tsc -p ./ + copy src\main.js out\main.js
+.\install.ps1                  # copy out/ + package.json (UTF-8, NO BOM)
+# full VS Code restart
 ```
 
----
-
-## 9. Chat History Compression
-
-To prevent unbounded context growth, the extension automatically compresses the chat history when it exceeds a threshold (30,000 characters total).
-
-### How it works
-
-After each `handleSendMessage()` call completes, `compressChatHistory()` checks the total character count of all messages in `chatHistory`. If it exceeds `COMPRESSION_THRESHOLD_CHARS`:
-
-1. All messages except system prompts and the last user+assistant exchange are collected.
-2. These messages are sent to the current AI provider with a summarization system prompt.
-3. The model returns a concise summary preserving key information (file paths, code changes, commands, decisions, etc.).
-4. The original messages are stored as a JSON string in the `compressedHistories` array (persisted in the session file).
-5. The original messages in `chatHistory` are replaced with a single system message: `[Chat history compressed]: <summary>`.
-6. A system message is displayed in the UI: "Chat history compressed: N previous messages summarized..."
-7. The session is saved automatically.
-
-### Session data model
-
-```typescript
-interface Session {
-    // ... existing fields
-    compressedHistories: string[];   // JSON-serialized original messages, one entry per compression event
-}
-```
-
-### Code location
-
-- `COMPRESSION_THRESHOLD_CHARS` constant: `extension.ts:10`
-- `compressChatHistory()` function: `extension.ts:768-818`
-- Called at `extension.ts:977` — after the agentic loop finishes and `isProcessingMessage` is released.
-
-### Compression prompt
-
-The summarization uses: *"Summarize the following chat conversation concisely but thoroughly. Preserve ALL key information: file paths, code changes, commands run, errors encountered, decisions made, user preferences, and any other context needed to continue the conversation seamlessly."*
+**Important:** never write `package.json` or TypeScript/JSON sources with a UTF-8 BOM — VS Code rejects `package.json` with a BOM (icon disappears).
 
 ---
 
-## 10. Logging
+## 10. Security (unchanged)
 
-The extension writes daily log files to `%USERPROFILE%\.vscode\extensions\local-copilot\logs\YYYY-MM-DD.log`.
-It logs session operations, model calls (with truncated content), command executions, and errors.
-All console output is prefixed with `[Local Copilot]` for easy filtering in the VS Code Developer Tools console.
-
----
-
-## 10. Security
-
-- **`makeRequest()`**: Forces IPv4 (`family: 4`), 30s timeout, HTTP/HTTPS auto-detection, `rejectUnauthorized: false` for HTTPS (to support self-signed certs on local providers).
-- **Command approval**: Commands are classified as safe (whitelist), dangerous (regex patterns), or neutral. Approval mode controls whether execution is automatic or requires user confirmation.
-- **`abort()`**: Every provider supports cancellation via `AbortController`. The stop handler also resolves all pending approval promises as denied.
+- `makeRequest()`: IPv4 only, 30s timeout, HTTP/HTTPS auto-detection, `rejectUnauthorized: false` for self-signed local HTTPS.
+- Command approval: safe whitelist / dangerous regex / neutral; approval mode gates execution.
+- `abort()`: every provider supports cancellation via `AbortController`; stop handler denies pending approvals.
+- Web UI adds token auth; CLI is local-only.
