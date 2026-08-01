@@ -1,14 +1,71 @@
-import * as vscode from 'vscode';
+import type * as vs from 'vscode';
 
-export function getWebviewContent(extensionUri: vscode.Uri, webview: vscode.Webview): string {
-    const scriptUri = webview.asWebviewUri(vscode.Uri.joinPath(extensionUri, 'out', 'main.js'));
+// The 'vscode' module only exists inside a VS Code extension host, so it is required lazily
+// inside getWebviewContent. Loading this module (and getWebUiPageHtml) works in plain Node,
+// which the Maggot webUI server relies on.
+export function getWebviewContent(extensionUri: vs.Uri, webview: vs.Webview): string {
+    const vscode = require('vscode') as typeof import('vscode');
+    const scriptUri = webview.asWebviewUri(vscode.Uri.joinPath(extensionUri, 'out', 'main.js')).toString();
+    const csp = `default-src 'none'; img-src ${webview.cspSource} data:; style-src ${webview.cspSource} 'unsafe-inline'; script-src ${webview.cspSource};`;
+    return pageHtml(csp, scriptUri, '', '');
+}
+
+// Maggot webUI: same UI, served by the standalone Node server. The browser page loads the
+// transport shim before main.js (it provides acquireVsCodeApi over a WebSocket) and gets a
+// fallback --vscode-* theme so the panel looks the same as in VS Code.
+export function getWebUiPageHtml(): string {
+    const csp = `default-src 'none'; img-src http: https: data:; style-src 'unsafe-inline'; script-src 'unsafe-inline'; connect-src ws: wss: http:;`;
+    const theme = `
+        <style id="webui-theme">
+            :root {
+                --vscode-editor-background: #1e1e1e;
+                --vscode-editor-foreground: #d4d4d4;
+                --vscode-titleBar-activeBackground: #323233;
+                --vscode-sideBar-background: #252526;
+                --vscode-panel-border: #454545;
+                --vscode-dropdown-background: #3c3c3c;
+                --vscode-dropdown-foreground: #cccccc;
+                --vscode-dropdown-border: #3c3c3c;
+                --vscode-input-background: #3c3c3c;
+                --vscode-input-foreground: #cccccc;
+                --vscode-input-border: #3c3c3c;
+                --vscode-button-background: #0e639c;
+                --vscode-button-foreground: #ffffff;
+                --vscode-button-hoverBackground: #1177bb;
+                --vscode-button-secondaryBackground: #3a3d41;
+                --vscode-button-secondaryForeground: #ffffff;
+                --vscode-button-secondaryHoverBackground: #45494e;
+                --vscode-foreground: #cccccc;
+                --vscode-descriptionForeground: #9d9d9d;
+                --vscode-textLink-foreground: #3794ff;
+                --vscode-textBlockQuote-background: #2a2a2a;
+                --vscode-list-hoverBackground: #2a2d2e;
+                --vscode-focusBorder: #007fd4;
+                --vscode-errorForeground: #f48771;
+                --vscode-terminal-background: #1e1e1e;
+                --vscode-terminal-foreground: #cccccc;
+                --vscode-charts-blue: #3794ff;
+                --vscode-testing-iconPassed: #73c991;
+                --vscode-testing-iconFailed: #f48771;
+                --vscode-inputValidation-errorBackground: #5a1d1d;
+                --vscode-inputValidation-errorBorder: #be1100;
+                --vscode-inputValidation-warningBackground: #352a05;
+                --vscode-inputValidation-warningBorder: #b89500;
+                --vscode-inputValidation-warningForeground: #ffcc00;
+            }
+        </style>`;
+    return pageHtml(csp, '/static/main.js', '<script src="/static/shim.js"></script>\n    ', theme);
+}
+
+function pageHtml(csp: string, scriptSrc: string, preScripts: string, extraHead: string): string {
     return `<!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src ${webview.cspSource} data:; style-src ${webview.cspSource} 'unsafe-inline'; script-src ${webview.cspSource};">
+    <meta http-equiv="Content-Security-Policy" content="${csp}">
     <title>Maggot chat</title>
+    ${extraHead}
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body { 
@@ -791,7 +848,7 @@ export function getWebviewContent(extensionUri: vscode.Uri, webview: vscode.Webv
         </div>
     </div>
 
-    <script src="${scriptUri}"></script>
+    ${preScripts}<script src="${scriptSrc}"></script>
 </body>
 </html>`;
 }

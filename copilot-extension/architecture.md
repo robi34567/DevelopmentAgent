@@ -166,7 +166,15 @@ Unchanged: `COMPRESSION_THRESHOLD_CHARS` (30,000), `compressChatHistory()` in co
 
 ### Maggot webUI
 
-- Node `http`/`https` server + WebSocket. Same `main.js` UI via a transport shim; adds token auth on the server.
+- Node `http` server + WebSocket (`webui/server.js`, `ws` package). Serves the same `main.js` UI
+  via a transport shim (`webui/static/shim.js`) that provides `acquireVsCodeApi()` over WebSocket
+  and a fallback `--vscode-*` theme so the panel looks like VS Code.
+- Reuses the shared HTML template: `webview.ts` lazily `require('vscode')` only inside
+  `getWebviewContent`, and exports `getWebUiPageHtml()` that is vscode-free.
+- One shared `AgentEngine`; events are broadcast to all connected clients. Approval requests go to
+  all clients and the first response wins.
+- Localhost only, no auth (binds `127.0.0.1`). Run: `npm run webui` (from `webui/`) or
+  `node webui/server.js [port] [workspace-root]`.
 
 ---
 
@@ -188,9 +196,13 @@ copilot-extension/
     aiProvider.ts                # VS Code adapter: VSCodeLM + Copilot providers
     cli.ts                       # Maggot CLI REPL (readline on the engine, no vscode)
     extension.ts                 # Maggot chat host (engine + webview wiring)
-    webview.ts                   # HTML/CSS template
+    webview.ts                   # HTML/CSS template (lazy vscode; also serves webUI via getWebUiPageHtml)
     main.js                      # shared frontend JS (webview / web transport shim)
   out/                           # compiled output
+  webui/
+    package.json                 # maggot-webui (dependency: ws)
+    server.js                    # http + WebSocket server on the shared engine
+    static/shim.js               # acquireVsCodeApi() transport shim for the browser
 ```
 
 CLI and webUI live in sibling packages that `tsc` the `core/` sources directly.
@@ -216,7 +228,8 @@ CLI and webUI live in sibling packages that `tsc` the `core/` sources directly.
 2. **Agent engine:** move the agentic loop, tool executors, session store, memory, and approval logic into `core/engine.ts` / `core/tools.ts` / `core/session.ts`; `extension.ts` drives the engine.
 3. **Maggot chat rename:** update `package.json`, webview copy, log prefixes.
 4. **Maggot CLI (done):** `readline` REPL on the engine (`src/cli.ts`, `npm run cli`).
-5. **Maggot webUI:** Node server + WebSocket + transport shim + token auth.
+5. **Maggot webUI (done):** Node server + WebSocket + transport shim (`webui/`). Fixed a pre-existing
+   engine bug along the way: `sendMessage` no longer wedges `isProcessing` when provider creation fails.
 6. **Docs:** update FEATURES.md and this file as each step lands.
 
 ---

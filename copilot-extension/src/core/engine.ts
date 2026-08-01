@@ -597,6 +597,7 @@ export class AgentEngine {
         try {
             provider = this.ensureProvider();
         } catch (err: any) {
+            this.isProcessing = false;
             this.emit({ type: 'error', text: err.message || 'Failed to initialize AI provider.' });
             return;
         }

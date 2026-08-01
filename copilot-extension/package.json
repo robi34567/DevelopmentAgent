@@ -141,6 +141,7 @@
     "vscode:prepublish": "npm run compile",
     "compile": "tsc -p ./ && copy src\\main.js out\\main.js",
     "cli": "node out/cli.js",
+    "webui": "node webui/server.js",
     "watch": "tsc -watch -p ./",
     "postinstall": "node ./node_modules/vscode/bin/install"
   },

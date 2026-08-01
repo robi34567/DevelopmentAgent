@@ -217,6 +217,28 @@ Anything that isn't a slash command is sent to the AI as a message. Approval pro
 
 ---
 
+## Maggot webUI
+
+The same chat UI runs in a browser, served by a small standalone Node server that drives the
+shared Maggot Agent Engine over WebSocket. It shares the config file and session store with the
+VS Code extension.
+
+Run it (after `npm run compile` from `copilot-extension/`):
+
+```
+cd copilot-extension/webui
+npm install          # installs the 'ws' dependency
+npm start            # serves http://127.0.0.1:8787 (localhost only, no auth)
+```
+
+Or: `node webui/server.js 8787 C:\my\workspace`
+
+Then open http://127.0.0.1:8787 in a browser. It looks and behaves like the VS Code panel —
+streaming, tool execution, approvals, choices, sessions, config — minus VS Code-only features
+(Benchmark buttons, terminal/file open, `copilot-web`/`vscode-lm` providers).
+
+---
+
 ## Storage Locations (Windows)
 
 | Item | Path |
