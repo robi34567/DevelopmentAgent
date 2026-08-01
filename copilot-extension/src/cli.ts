@@ -60,6 +60,8 @@ let pendingAskResolve: ((v: string) => void) | null = null;
 let queuedInput: string[] = [];
 let streamLen = 0;
 let thinkLen = 0;
+let thinkingActive = false;
+let contentStarted = false;
 
 function ask(prompt: string): Promise<string> {
     process.stdout.write(prompt);
@@ -128,27 +130,38 @@ function onEvent(evt: EngineEvent) {
             out();
             streamLen = 0;
             thinkLen = 0;
+            thinkingActive = false;
+            contentStarted = false;
             break;
         case 'assistantDelta': {
             const delta = evt.content.substring(streamLen);
-            if (delta) process.stdout.write(delta);
+            if (delta) {
+                if (thinkingActive) {
+                    process.stderr.write('\n\n');
+                    thinkingActive = false;
+                }
+                contentStarted = true;
+                process.stdout.write(delta);
+            }
             streamLen = evt.content.length;
             break;
         }
         case 'updateThinking': {
             const delta = evt.content.substring(thinkLen);
-            if (delta) {
-                if (thinkLen === 0) out(c.dim('🧠 thinking:'));
-                process.stdout.write(c.dim(delta));
+            if (delta && !contentStarted) {
+                if (thinkLen === 0) {
+                    process.stderr.write('\n' + c.dim('🧠 thinking:') + '\n');
+                    thinkingActive = true;
+                }
+                process.stderr.write(c.dim(delta));
             }
             thinkLen = evt.content.length;
             break;
         }
         case 'finalize':
             out();
-            if (evt.thinking && evt.thinking.trim()) {
-                origConsoleError(c.dim(`🧠 thinking: ${evt.thinking.trim()}`));
-            }
+            thinkingActive = false;
+            contentStarted = false;
             if (evt.model || evt.stats) {
                 const parts: string[] = [];
                 if (evt.model) parts.push(`model: ${evt.model}`);
