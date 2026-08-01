@@ -14,7 +14,7 @@ export function getWebviewContent(extensionUri: vs.Uri, webview: vs.Webview): st
 // transport shim before main.js (it provides acquireVsCodeApi over a WebSocket) and gets a
 // fallback --vscode-* theme so the panel looks the same as in VS Code.
 export function getWebUiPageHtml(): string {
-    const csp = `default-src 'none'; img-src http: https: data:; style-src 'unsafe-inline'; script-src 'unsafe-inline'; connect-src ws: wss: http:;`;
+    const csp = `default-src 'none'; img-src http: https: data:; style-src 'unsafe-inline'; script-src 'self' 'unsafe-inline'; connect-src ws: wss: http:;`;
     const theme = `
         <style id="webui-theme">
             :root {
